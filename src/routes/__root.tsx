@@ -72,14 +72,13 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "EquityGraph — GraphRAG Pipeline Workbench" },
-      { name: "description", content: "Run a financial GraphRAG pipeline end to end: ingest a 10-K, retrieve peers, query the knowledge graph, and audit faithfulness." },
-      { name: "author", content: "EquityGraph" },
-      { property: "og:title", content: "EquityGraph — GraphRAG Pipeline Workbench" },
-      { property: "og:description", content: "Run a financial GraphRAG pipeline end to end with live step-by-step progress." },
+      { title: "Verdant — KYC Intelligence for Banks & Enterprises" },
+      { name: "description", content: "Automated counterparty due diligence: ingest filings, extract entities, query a knowledge graph, and audit answers — built for KYC teams." },
+      { name: "author", content: "Verdant KYC" },
+      { property: "og:title", content: "Verdant — KYC Intelligence" },
+      { property: "og:description", content: "Automated counterparty due diligence powered by GraphRAG." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
-      { name: "twitter:site", content: "@Lovable" },
     ],
     links: [
       { rel: "stylesheet", href: appCss },
@@ -87,7 +86,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
       {
         rel: "stylesheet",
-        href: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap",
+        href: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;700&display=swap",
       },
     ],
   }),

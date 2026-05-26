@@ -10,8 +10,11 @@ import {
   Send,
   ShieldCheck,
   Sparkles,
-  Building2,
   ChevronDown,
+  Network,
+  ScanSearch,
+  Gauge,
+  X,
 } from "lucide-react";
 import { StepItem, type StepData, type StepStatus } from "@/components/StepItem";
 import {
@@ -48,15 +51,14 @@ function fmtBytes(n: number) {
 }
 
 const QA_TRACE_STEPS = [
-  "cypher_translation",
-  "graph_traversal",
-  "context_retrieval",
-  "answer_generation",
-  "citation_attachment",
+  "Cypher translation",
+  "Graph traversal",
+  "Context retrieval",
+  "Answer generation",
+  "Citation attachment",
 ];
 
 function Index() {
-  // -------- Backend config --------
   const [backendUrl, setBackendUrlState] = useState(DEFAULT_BACKEND_URL);
   const [showSettings, setShowSettings] = useState(false);
   const [connected, setConnected] = useState<boolean | null>(null);
@@ -80,7 +82,6 @@ function Index() {
     };
   }, [backendUrl]);
 
-  // -------- Phase 1 state --------
   const [file, setFile] = useState<File | null>(null);
   const [fiscalYear, setFiscalYear] = useState("2024");
   const [phase1Status, setPhase1Status] = useState<PhaseStatus>("idle");
@@ -99,7 +100,6 @@ function Index() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
 
-  // -------- Phase 2: QA chat --------
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [question, setQuestion] = useState("");
   const [asking, setAsking] = useState(false);
@@ -130,10 +130,7 @@ function Index() {
       fd.append("file", file);
       fd.append("fiscal_year", fiscalYear);
 
-      const r = await fetch(`${backendUrl}/pipeline/run`, {
-        method: "POST",
-        body: fd,
-      });
+      const r = await fetch(`${backendUrl}/pipeline/run`, { method: "POST", body: fd });
       if (!r.ok) {
         const t = await r.text();
         throw new Error(`Upload failed (${r.status}): ${t}`);
@@ -195,20 +192,17 @@ function Index() {
     }
   }, [file, fiscalYear, backendUrl, resetSteps]);
 
-  useEffect(() => {
-    return () => {
-      eventSourceRef.current?.close();
-    };
-  }, []);
+  useEffect(() => () => eventSourceRef.current?.close(), []);
 
-  // Smooth scroll to QA when Phase 1 completes
   useEffect(() => {
     if (phase1Status === "complete") {
-      setTimeout(() => phase2Ref.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 400);
+      setTimeout(
+        () => phase2Ref.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
+        400,
+      );
     }
   }, [phase1Status]);
 
-  // -------- QA submit (graceful local fallback if backend route missing) --------
   const askQuestion = useCallback(async () => {
     const q = question.trim();
     if (!q || asking) return;
@@ -217,13 +211,12 @@ function Index() {
       id: crypto.randomUUID(),
       role: "assistant",
       content: "",
-      trace: QA_TRACE_STEPS.map((s) => ({ step: s, status: "running" })),
+      trace: QA_TRACE_STEPS.map((s) => ({ step: s, status: "pending" })),
     };
     setMessages((m) => [...m, userMsg, placeholder]);
     setQuestion("");
     setAsking(true);
 
-    // Animate trace steps client-side for smoothness
     for (let i = 0; i < QA_TRACE_STEPS.length; i++) {
       await new Promise((r) => setTimeout(r, 420));
       setMessages((m) =>
@@ -241,7 +234,6 @@ function Index() {
       );
     }
 
-    // Try real backend, fall back to mock
     let answer = "";
     try {
       const r = await fetch(`${backendUrl}/qa/run`, {
@@ -255,7 +247,7 @@ function Index() {
       } else throw new Error();
     } catch {
       answer =
-        "Based on the ingested filing and peer knowledge graph, the company reports total revenue concentration with its top three customers exceeding 40%, and its risk profile aligns closely with two of the five identified peers. Operating margin sits below the peer median by ~180 bps.";
+        "Based on the ingested filing and peer knowledge graph, the company reports total revenue concentration with its top three customers exceeding 40%, and its risk profile aligns closely with two of the five identified peers. Operating margin sits roughly 180 bps below the peer median.";
     }
 
     setMessages((m) =>
@@ -268,7 +260,6 @@ function Index() {
     setAsking(false);
   }, [question, asking, backendUrl]);
 
-  // -------- Evaluation (optional, per-message) --------
   const runEvaluation = useCallback(
     async (messageId: string) => {
       setMessages((m) =>
@@ -289,10 +280,10 @@ function Index() {
         await new Promise((r) => setTimeout(r, 900));
         result = {
           rows: [
-            { dimension: "Claim Decomposition", score: 0.94, note: "8 atomic claims extracted" },
-            { dimension: "Source Matching", score: 0.88, note: "7/8 claims matched to XBRL/HTM" },
-            { dimension: "Faithfulness Judge", score: 0.91, note: "LLM-judge avg across claims" },
-            { dimension: "Hallucination Check", score: 0.97, note: "No unsupported claims detected" },
+            { dimension: "Claim decomposition", score: 0.94, note: "8 atomic claims extracted" },
+            { dimension: "Source matching", score: 0.88, note: "7/8 claims matched to XBRL / HTM" },
+            { dimension: "Faithfulness judge", score: 0.91, note: "LLM-judge avg across claims" },
+            { dimension: "Hallucination check", score: 0.97, note: "No unsupported claims detected" },
           ],
           weighted: 0.92,
         };
@@ -307,57 +298,40 @@ function Index() {
     [backendUrl, messages],
   );
 
-  const phase1Badge = (() => {
-    switch (phase1Status) {
-      case "complete":
-        return { text: "Profile Ready", cls: "text-[var(--brand-teal)] bg-[color-mix(in_oklab,var(--brand-teal)_10%,transparent)] ring-[color-mix(in_oklab,var(--brand-teal)_30%,transparent)]" };
-      case "running":
-        return { text: "Ingesting", cls: "text-[var(--brand-orange)] bg-[color-mix(in_oklab,var(--brand-orange)_10%,transparent)] ring-[color-mix(in_oklab,var(--brand-orange)_30%,transparent)]" };
-      case "failed":
-        return { text: "Failed", cls: "text-destructive bg-destructive/5 ring-destructive/20" };
-      default:
-        return { text: "Awaiting Filing", cls: "text-muted-foreground bg-muted ring-border" };
-    }
-  })();
-
   const handleFiles = (files: FileList | null) => {
     if (!files || !files[0]) return;
     setFile(files[0]);
   };
 
   const phase1Done = phase1Status === "complete";
+  const stepsCompleted = steps.filter((s) => s.status === "done").length;
 
   return (
-    <div className="min-h-screen font-sans text-foreground selection:bg-[color-mix(in_oklab,var(--brand-teal)_25%,transparent)]">
+    <div className="min-h-screen font-sans text-foreground selection:bg-accent/30">
       {/* Nav */}
-      <nav className="sticky top-0 z-50 border-b border-border bg-background/75 backdrop-blur-xl">
-        <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-6">
-          <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--brand-deep)] text-[var(--brand-teal)] shadow-[var(--shadow-soft)]">
-              <ShieldCheck className="h-5 w-5" strokeWidth={2.25} />
+      <nav className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-xl">
+        <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-6">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-7 w-7 items-center justify-center rounded-md bg-accent/15 text-accent ring-1 ring-accent/25">
+              <ShieldCheck className="h-4 w-4" strokeWidth={2.25} />
             </div>
-            <div className="flex flex-col leading-tight">
-              <span className="font-display text-lg italic tracking-tight text-foreground">
-                Verdant
-              </span>
-              <span className="font-mono text-[9px] uppercase tracking-[0.18em] text-muted-foreground">
-                KYC Intelligence
-              </span>
-            </div>
+            <span className="text-[15px] font-semibold tracking-tight text-foreground">
+              Verdant
+            </span>
           </div>
-          <div className="flex items-center gap-4">
-            <div className="hidden sm:flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5">
-              <div
+          <div className="flex items-center gap-2">
+            <div className="hidden sm:flex items-center gap-2 rounded-full border border-border bg-card px-2.5 py-1">
+              <span
                 className={`h-1.5 w-1.5 rounded-full ${
                   connected === null
                     ? "bg-muted-foreground/40"
                     : connected
-                    ? "bg-[var(--brand-teal)]"
+                    ? "bg-accent"
                     : "bg-destructive"
                 }`}
               />
-              <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-                {connected === null ? "Checking" : connected ? "Engine online" : "Engine offline"}
+              <span className="text-[11px] text-muted-foreground">
+                {connected === null ? "Checking" : connected ? "Operational" : "Offline"}
               </span>
             </div>
             <button
@@ -370,64 +344,90 @@ function Index() {
           </div>
         </div>
         {showSettings && (
-          <div className="border-t border-border bg-card">
-            <div className="mx-auto max-w-5xl px-6 py-3 flex items-center gap-3">
-              <label className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-                Backend URL
-              </label>
+          <div className="border-t border-border bg-panel">
+            <div className="mx-auto flex max-w-6xl items-center gap-3 px-6 py-3">
+              <label className="text-xs text-muted-foreground">Backend URL</label>
               <input
                 type="text"
                 value={backendUrl}
                 onChange={(e) => setBackendUrlState(e.target.value)}
                 onBlur={(e) => setBackendUrl(e.target.value)}
                 placeholder="http://localhost:8000"
-                className="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-mono outline-none focus:ring-2 focus:ring-ring"
+                className="flex-1 rounded-md border border-input bg-background px-3 py-1.5 font-mono text-xs outline-none focus:ring-2 focus:ring-ring"
               />
             </div>
           </div>
         )}
       </nav>
 
-      <main className="mx-auto max-w-5xl px-6 pt-10 pb-24">
-        {/* Hero — visual only */}
-        <header className="relative mb-14 h-56 sm:h-72 overflow-hidden rounded-3xl border border-border bg-card/40 backdrop-blur-sm shadow-[var(--shadow-soft)]">
-          <div className="absolute inset-0 bg-grid opacity-40" />
-          <div className="absolute -top-32 -left-24 h-[420px] w-[420px] rounded-full hero-orb opacity-80" />
-          <div className="absolute -bottom-40 -right-20 h-[360px] w-[360px] rounded-full hero-orb opacity-60" style={{ animationDirection: "reverse" }} />
-          <div className="absolute inset-6 rounded-2xl hero-ring" />
-          <div className="absolute inset-0 flex items-center justify-center">
-            <div className="relative flex h-24 w-24 items-center justify-center rounded-2xl border border-[var(--brand-teal)]/30 bg-[var(--brand-deep)]/60 backdrop-blur-md shadow-[var(--shadow-glow)]">
-              <ShieldCheck className="h-10 w-10 text-[var(--brand-teal)] text-glow" strokeWidth={1.75} />
-              <span className="absolute -inset-1 rounded-2xl border border-[var(--brand-teal)]/20 animate-[pulseSlow_3s_ease-in-out_infinite]" />
+      <main className="mx-auto max-w-6xl px-6 pt-12 pb-24">
+        {/* Hero */}
+        <header className="mb-12" style={{ animation: "slideUp 0.5s var(--ease-out-expo) both" }}>
+          <div className="grid gap-8 md:grid-cols-[1.4fr_1fr] md:items-end">
+            <div>
+              <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-border bg-card px-2.5 py-1 text-[11px] text-muted-foreground">
+                <span className="h-1.5 w-1.5 rounded-full bg-accent" />
+                KYC Intelligence Platform
+              </div>
+              <h1 className="text-balance text-4xl font-semibold tracking-tight text-foreground sm:text-[44px] sm:leading-[1.05]">
+                Know who you're really dealing with.
+              </h1>
+              <p className="mt-4 max-w-lg text-[15px] leading-relaxed text-muted-foreground">
+                Ingest counterparty filings, extract structured entities, and query an
+                auditable knowledge graph &mdash; built for banks and enterprises that
+                can't afford to guess.
+              </p>
             </div>
-          </div>
-          <div className="absolute bottom-4 left-6 right-6 flex items-center justify-between font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground/70">
-            <span>● Live engine</span>
-            <span>Verdant · KYC</span>
-            <span className="hidden sm:inline">Graph · Audit · Trust</span>
+
+            {/* Summary panel */}
+            <div className="rounded-xl border border-border bg-card p-4 shadow-[var(--shadow-soft)]">
+              <div className="mb-3 flex items-center justify-between">
+                <span className="text-xs font-medium text-muted-foreground">
+                  Session overview
+                </span>
+                <span className="text-[10px] text-muted-foreground/70">Live</span>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <StatCard
+                  icon={<FileText className="h-3.5 w-3.5" />}
+                  label="Filing"
+                  value={file ? "1" : "0"}
+                />
+                <StatCard
+                  icon={<Network className="h-3.5 w-3.5" />}
+                  label="Steps"
+                  value={`${stepsCompleted}/${steps.length}`}
+                />
+                <StatCard
+                  icon={<Gauge className="h-3.5 w-3.5" />}
+                  label="Status"
+                  value={
+                    phase1Status === "complete"
+                      ? "Ready"
+                      : phase1Status === "running"
+                      ? "Running"
+                      : phase1Status === "failed"
+                      ? "Failed"
+                      : "Idle"
+                  }
+                  emphasis={phase1Status === "complete"}
+                />
+              </div>
+            </div>
           </div>
         </header>
 
         {/* PHASE 1 */}
         <section style={{ animation: "slideUp 0.6s var(--ease-out-expo) both" }}>
           <PhaseHeader
-            kicker="01 — Ingestion"
-            title="Counterparty Filing"
+            index="01"
+            title="Counterparty filing"
             subtitle="Drop a 10-K, annual report, or registration document. Verdant parses it into structured entities and a graph."
-            badge={phase1Badge}
           />
 
-          <div className="grid gap-6">
+          <div className="grid gap-5">
             {/* Upload card */}
-            <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-[var(--shadow-soft)]">
-              <div className="border-b border-border bg-[var(--panel)] px-5 py-3 flex items-center justify-between">
-                <div className="flex items-center gap-2 text-[var(--brand-deep)]">
-                  <Building2 className="h-3.5 w-3.5" />
-                  <span className="font-mono text-[10px] uppercase tracking-widest">Subject Entity</span>
-                </div>
-                <span className="font-mono text-[10px] text-muted-foreground">.html · .htm · .pdf</span>
-              </div>
-
+            <div className="overflow-hidden rounded-xl border border-border bg-card shadow-[var(--shadow-soft)]">
               <div className="p-5">
                 <label
                   onDragOver={(e) => {
@@ -440,10 +440,10 @@ function Index() {
                     setDragOver(false);
                     handleFiles(e.dataTransfer.files);
                   }}
-                  className={`relative flex h-36 w-full cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed transition-all bg-grid ${
+                  className={`relative flex h-44 w-full cursor-pointer flex-col items-center justify-center gap-3 rounded-lg border border-dashed transition-all ${
                     dragOver
-                      ? "border-[var(--brand-teal)] bg-[color-mix(in_oklab,var(--brand-teal)_5%,transparent)]"
-                      : "border-border hover:border-[var(--brand-teal)]/50"
+                      ? "border-accent bg-accent/5"
+                      : "border-border bg-panel hover:border-accent/50 hover:bg-elevated"
                   }`}
                 >
                   <input
@@ -453,55 +453,69 @@ function Index() {
                     className="hidden"
                     onChange={(e) => handleFiles(e.target.files)}
                   />
-                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--brand-deep)] text-[var(--brand-teal)]">
-                    <Upload className="h-4 w-4" />
+                  <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-elevated text-accent ring-1 ring-border">
+                    <Upload className="h-4.5 w-4.5" />
                   </div>
-                  <span className="text-sm font-medium text-[var(--brand-deep)]">
-                    Drop a counterparty filing or <span className="text-[var(--brand-teal)] underline-offset-4 hover:underline">browse files</span>
-                  </span>
-                  <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-                    SEC 10-K · Annual Report · Registration Doc
-                  </span>
+                  <div className="text-center">
+                    <div className="text-sm font-medium text-foreground">
+                      Drop a filing here, or{" "}
+                      <span className="text-accent underline-offset-4 hover:underline">
+                        browse
+                      </span>
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      Supports .html, .htm, .pdf &middot; up to 50 MB
+                    </div>
+                  </div>
                 </label>
 
+                {/* File row + actions */}
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <div className="flex h-7 w-7 items-center justify-center rounded-md bg-muted shrink-0">
-                      <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+                  <div className="flex min-w-0 items-center gap-3">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-elevated ring-1 ring-border">
+                      <FileText className="h-4 w-4 text-muted-foreground" />
                     </div>
-                    <span className="text-sm font-medium truncate">
-                      {file ? file.name : "No file selected"}
-                    </span>
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium text-foreground">
+                        {file ? file.name : "No file selected"}
+                      </div>
+                      <div className="text-[11px] text-muted-foreground">
+                        {file ? fmtBytes(file.size) : "Awaiting upload"}
+                      </div>
+                    </div>
                     {file && (
-                      <span className="font-mono text-[10px] text-muted-foreground uppercase shrink-0">
-                        {fmtBytes(file.size)}
-                      </span>
+                      <button
+                        onClick={() => setFile(null)}
+                        className="ml-1 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                        aria-label="Remove file"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
                     )}
                   </div>
+
                   <div className="flex items-center gap-2">
-                    <div className="flex items-center gap-2 rounded-md border border-input bg-background px-2.5 py-1.5">
-                      <label className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-                        FY
-                      </label>
+                    <div className="flex items-center gap-2 rounded-md border border-input bg-background px-3 py-2">
+                      <label className="text-[11px] text-muted-foreground">Fiscal year</label>
                       <input
                         type="text"
                         value={fiscalYear}
                         onChange={(e) => setFiscalYear(e.target.value)}
-                        className="w-14 bg-transparent text-xs font-mono outline-none text-[var(--brand-deep)]"
+                        className="w-14 bg-transparent text-sm font-medium outline-none text-foreground"
                       />
                     </div>
                     <button
                       onClick={runPipeline}
                       disabled={!file || phase1Status === "running"}
-                      className="group relative flex items-center gap-2 overflow-hidden rounded-md bg-[var(--brand-deep)] text-[var(--brand-teal)] text-xs font-semibold px-4 py-2 transition-all hover:bg-[color-mix(in_oklab,var(--brand-deep)_92%,var(--brand-teal)_8%)] disabled:opacity-40 disabled:cursor-not-allowed shadow-[var(--shadow-soft)]"
+                      className="inline-flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-sm font-semibold text-accent-foreground transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       {phase1Status === "complete" || phase1Status === "failed" ? (
                         <>
-                          <RotateCcw className="h-3.5 w-3.5" /> Re-ingest
+                          <RotateCcw className="h-3.5 w-3.5" /> Re-run
                         </>
                       ) : (
                         <>
-                          <Play className="h-3.5 w-3.5 fill-current" /> Run Diligence
+                          <Play className="h-3.5 w-3.5 fill-current" /> Run diligence
                         </>
                       )}
                     </button>
@@ -510,7 +524,7 @@ function Index() {
 
                 {phase1Error && (
                   <div className="mt-3 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-2.5 text-xs text-destructive">
-                    <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                    <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                     <span className="font-mono">{phase1Error}</span>
                   </div>
                 )}
@@ -520,11 +534,22 @@ function Index() {
             {/* Stepper */}
             {(phase1Status !== "idle" || steps.some((s) => s.status !== "pending")) && (
               <div
-                className="rounded-2xl border border-border bg-card p-6 shadow-[var(--shadow-soft)]"
+                className="rounded-xl border border-border bg-card p-6 shadow-[var(--shadow-soft)]"
                 style={{ animation: "fadeReveal 0.5s var(--ease-out-expo) both" }}
               >
+                <div className="mb-4 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <ScanSearch className="h-4 w-4 text-accent" />
+                    <span className="text-sm font-medium text-foreground">
+                      Pipeline progress
+                    </span>
+                  </div>
+                  <span className="text-xs text-muted-foreground">
+                    {stepsCompleted} / {steps.length} complete
+                  </span>
+                </div>
                 <div className="relative space-y-0 pl-2">
-                  <div className="absolute left-4 top-2 bottom-2 w-px bg-border" />
+                  <div className="absolute bottom-2 left-4 top-2 w-px bg-border" />
                   {steps.map((s, i) => (
                     <StepItem key={s.id} step={s} isLast={i === steps.length - 1} />
                   ))}
@@ -534,7 +559,7 @@ function Index() {
           </div>
         </section>
 
-        {/* PHASE 2 — appears smoothly after Phase 1 complete */}
+        {/* PHASE 2 */}
         {phase1Done && (
           <section
             ref={phase2Ref}
@@ -542,23 +567,21 @@ function Index() {
             style={{ animation: "fadeReveal 0.8s var(--ease-out-expo) both" }}
           >
             <PhaseHeader
-              kicker="02 — Inquiry"
+              index="02"
               title="Ask about the counterparty"
               subtitle="Query the knowledge graph in natural language. Every answer ships with a process trace and can be audited on demand."
-              badge={{
-                text: "Ready",
-                cls: "text-[var(--brand-teal)] bg-[color-mix(in_oklab,var(--brand-teal)_10%,transparent)] ring-[color-mix(in_oklab,var(--brand-teal)_30%,transparent)]",
-              }}
             />
 
-            <div className="rounded-2xl border border-border bg-card shadow-[var(--shadow-soft)] overflow-hidden">
-              {/* Messages */}
-              <div className="divide-y divide-border max-h-[520px] overflow-y-auto">
+            <div className="overflow-hidden rounded-xl border border-border bg-card shadow-[var(--shadow-soft)]">
+              <div className="max-h-[520px] divide-y divide-border overflow-y-auto">
                 {messages.length === 0 && (
                   <div className="p-10 text-center">
-                    <Sparkles className="h-5 w-5 mx-auto text-[var(--brand-teal)] mb-3" />
-                    <p className="text-sm text-muted-foreground max-w-sm mx-auto">
-                      Try: <span className="text-[var(--brand-deep)] italic">"What are this company's top concentration risks compared to its peers?"</span>
+                    <Sparkles className="mx-auto mb-3 h-5 w-5 text-accent" />
+                    <p className="mx-auto max-w-sm text-sm text-muted-foreground">
+                      Try:{" "}
+                      <span className="italic text-foreground">
+                        "What are this company's top concentration risks compared to its peers?"
+                      </span>
                     </p>
                   </div>
                 )}
@@ -567,13 +590,12 @@ function Index() {
                 ))}
               </div>
 
-              {/* Composer */}
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
                   askQuestion();
                 }}
-                className="border-t border-border bg-[var(--panel)] p-3 flex items-center gap-2"
+                className="flex items-center gap-2 border-t border-border bg-panel p-3"
               >
                 <input
                   type="text"
@@ -581,12 +603,12 @@ function Index() {
                   onChange={(e) => setQuestion(e.target.value)}
                   placeholder="Ask about risks, financials, peer comparisons…"
                   disabled={asking}
-                  className="flex-1 rounded-lg bg-card border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring transition-all placeholder:text-muted-foreground"
+                  className="flex-1 rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none transition-all placeholder:text-muted-foreground focus:ring-2 focus:ring-ring"
                 />
                 <button
                   type="submit"
                   disabled={!question.trim() || asking}
-                  className="flex items-center gap-1.5 rounded-lg bg-[var(--brand-orange)] text-white text-xs font-semibold px-4 py-2.5 transition-all hover:brightness-105 disabled:opacity-40 disabled:cursor-not-allowed shadow-[var(--shadow-soft)]"
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-accent-foreground transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <Send className="h-3.5 w-3.5" /> Ask
                 </button>
@@ -596,15 +618,13 @@ function Index() {
         )}
 
         {/* Footer */}
-        <footer className="mt-24 pt-8 border-t border-border flex flex-wrap justify-between items-center gap-3">
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <ShieldCheck className="h-3.5 w-3.5 text-[var(--brand-teal)]" />
-            <span className="text-[10px] font-mono uppercase tracking-widest">
-              Verdant · KYC Engine · Auditable by design
-            </span>
+        <footer className="mt-24 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-6 text-xs text-muted-foreground">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="h-3.5 w-3.5 text-accent" />
+            <span>Verdant &middot; Auditable by design</span>
           </div>
-          <div className="text-[10px] text-muted-foreground font-mono">
-            backend · {backendUrl.replace(/^https?:\/\//, "")}
+          <div className="font-mono text-[11px]">
+            backend &middot; {backendUrl.replace(/^https?:\/\//, "")}
           </div>
         </footer>
       </main>
@@ -612,31 +632,50 @@ function Index() {
   );
 }
 
-function PhaseHeader({
-  kicker,
-  title,
-  subtitle,
-  badge,
+function StatCard({
+  icon,
+  label,
+  value,
+  emphasis,
 }: {
-  kicker: string;
-  title: string;
-  subtitle: string;
-  badge: { text: string; cls: string };
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  emphasis?: boolean;
 }) {
   return (
-    <div className="mb-8 flex items-start justify-between gap-4">
-      <div className="max-w-xl">
-        <div className="font-mono text-[10px] font-bold tracking-[0.2em] text-[var(--brand-orange)] uppercase mb-2">
-          {kicker}
-        </div>
-        <h2 className="font-display text-3xl tracking-tight text-[var(--brand-deep)]">{title}</h2>
-        <p className="mt-2 text-sm text-muted-foreground leading-relaxed">{subtitle}</p>
+    <div className="rounded-lg border border-border bg-panel p-3">
+      <div className="mb-2 flex items-center gap-1.5 text-muted-foreground">
+        {icon}
+        <span className="text-[11px]">{label}</span>
       </div>
-      <span
-        className={`mt-1 text-[10px] font-mono uppercase tracking-widest px-2.5 py-1 rounded-full ring-1 whitespace-nowrap ${badge.cls}`}
+      <div
+        className={`text-lg font-semibold tabular-nums ${
+          emphasis ? "text-accent" : "text-foreground"
+        }`}
       >
-        {badge.text}
-      </span>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function PhaseHeader({
+  index,
+  title,
+  subtitle,
+}: {
+  index: string;
+  title: string;
+  subtitle: string;
+}) {
+  return (
+    <div className="mb-6 flex items-start gap-4">
+      <span className="mt-1 font-mono text-xs text-muted-foreground/70">{index}</span>
+      <div className="max-w-2xl">
+        <h2 className="text-xl font-semibold tracking-tight text-foreground">{title}</h2>
+        <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{subtitle}</p>
+      </div>
     </div>
   );
 }
@@ -652,8 +691,11 @@ function MessageBubble({
 
   if (message.role === "user") {
     return (
-      <div className="p-5 flex justify-end" style={{ animation: "fadeReveal 0.4s var(--ease-out-expo) both" }}>
-        <div className="max-w-[80%] rounded-2xl rounded-tr-sm bg-[var(--brand-deep)] text-[var(--brand-teal)] px-4 py-2.5 text-sm font-medium shadow-[var(--shadow-soft)]">
+      <div
+        className="flex justify-end p-5"
+        style={{ animation: "fadeReveal 0.4s var(--ease-out-expo) both" }}
+      >
+        <div className="max-w-[80%] rounded-2xl rounded-tr-sm border border-border bg-elevated px-4 py-2.5 text-sm font-medium text-foreground">
           {message.content}
         </div>
       </div>
@@ -666,25 +708,22 @@ function MessageBubble({
   return (
     <div className="p-5" style={{ animation: "fadeReveal 0.4s var(--ease-out-expo) both" }}>
       <div className="flex gap-3">
-        <div className="h-7 w-7 shrink-0 rounded-full bg-[var(--brand-teal)] flex items-center justify-center text-white shadow-[var(--shadow-soft)]">
+        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent/15 text-accent ring-1 ring-accent/25">
           <Sparkles className="h-3.5 w-3.5" />
         </div>
-        <div className="flex-1 min-w-0">
-          {/* Trace */}
+        <div className="min-w-0 flex-1">
           {message.trace && (
-            <div className="mb-3 rounded-lg border border-border bg-[var(--panel)] overflow-hidden">
+            <div className="mb-3 overflow-hidden rounded-lg border border-border bg-panel">
               <button
                 onClick={() => setTraceOpen((o) => !o)}
-                className="w-full flex items-center justify-between px-3 py-2 text-left"
+                className="flex w-full items-center justify-between px-3 py-2 text-left"
               >
-                <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--brand-deep)]">
-                  {isThinking ? "Reasoning…" : "Process trace"}
+                <span className="text-xs font-medium text-foreground">
+                  {isThinking ? "Reasoning" : "Process trace"}
                 </span>
                 <div className="flex items-center gap-2">
                   {isThinking && (
-                    <span className="font-mono text-[10px] text-[var(--brand-orange)] animate-pulse">
-                      live
-                    </span>
+                    <span className="text-[11px] text-accent">live</span>
                   )}
                   <ChevronDown
                     className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${
@@ -694,7 +733,7 @@ function MessageBubble({
                 </div>
               </button>
               {(traceOpen || isThinking) && (
-                <div className="px-3 pb-3 space-y-1.5 font-mono text-[10px]">
+                <div className="space-y-1.5 px-3 pb-3 text-xs">
                   {message.trace.map((t) => (
                     <div key={t.step} className="flex items-center justify-between">
                       <span className="flex items-center gap-2 text-muted-foreground">
@@ -704,13 +743,13 @@ function MessageBubble({
                       <span
                         className={
                           t.status === "done"
-                            ? "text-[var(--brand-teal)]"
+                            ? "text-accent"
                             : t.status === "running"
-                            ? "text-[var(--brand-orange)]"
+                            ? "text-foreground"
                             : "text-muted-foreground/60"
                         }
                       >
-                        {t.status.toUpperCase()}
+                        {t.status}
                       </span>
                     </div>
                   ))}
@@ -719,31 +758,27 @@ function MessageBubble({
             </div>
           )}
 
-          {/* Answer */}
           {isThinking ? (
-            <div className="h-4 w-2/3 rounded shimmer-bg" />
+            <div className="shimmer-bg h-4 w-2/3 rounded" />
           ) : (
-            <p className="text-sm leading-relaxed text-[var(--brand-deep)]">{message.content}</p>
+            <p className="text-sm leading-relaxed text-foreground">{message.content}</p>
           )}
 
-          {/* Evaluation CTA */}
           {!isThinking && traceDone && (
             <div className="mt-4">
               {!message.evaluation && !message.evaluating && (
                 <button
                   onClick={onEvaluate}
-                  className="inline-flex items-center gap-2 rounded-full border border-[var(--brand-teal)]/40 bg-[color-mix(in_oklab,var(--brand-teal)_6%,transparent)] px-3.5 py-1.5 text-[11px] font-semibold text-[var(--brand-deep)] hover:bg-[color-mix(in_oklab,var(--brand-teal)_12%,transparent)] transition-all"
+                  className="inline-flex items-center gap-2 rounded-md border border-border bg-elevated px-3 py-1.5 text-xs font-medium text-foreground transition-all hover:bg-muted"
                 >
-                  <ShieldCheck className="h-3.5 w-3.5 text-[var(--brand-teal)]" />
+                  <ShieldCheck className="h-3.5 w-3.5 text-accent" />
                   Audit this answer
-                  <span className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground">
-                    optional
-                  </span>
+                  <span className="text-[10px] text-muted-foreground">optional</span>
                 </button>
               )}
               {message.evaluating && (
-                <div className="inline-flex items-center gap-2 text-[11px] text-muted-foreground font-mono uppercase tracking-widest">
-                  <span className="h-1.5 w-1.5 rounded-full bg-[var(--brand-orange)] animate-pulse" />
+                <div className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
                   Auditing claims…
                 </div>
               )}
@@ -757,12 +792,11 @@ function MessageBubble({
 }
 
 function StatusDot({ status }: { status: string }) {
-  if (status === "done")
-    return <span className="h-1.5 w-1.5 rounded-full bg-[var(--brand-teal)]" />;
+  if (status === "done") return <span className="h-1.5 w-1.5 rounded-full bg-accent" />;
   if (status === "running")
     return (
       <span
-        className="h-1.5 w-1.5 rounded-full bg-[var(--brand-orange)]"
+        className="h-1.5 w-1.5 rounded-full bg-foreground"
         style={{ animation: "pulseSlow 1.2s infinite" }}
       />
     );
@@ -772,21 +806,17 @@ function StatusDot({ status }: { status: string }) {
 function Scorecard({ data }: { data: EvaluationResult }) {
   return (
     <div
-      className="mt-2 overflow-hidden rounded-xl border border-border bg-card"
+      className="mt-2 overflow-hidden rounded-xl border border-border bg-panel"
       style={{ animation: "fadeReveal 0.5s var(--ease-out-expo) both" }}
     >
-      <div className="flex items-center justify-between px-4 py-3 bg-[var(--panel)] border-b border-border">
+      <div className="flex items-center justify-between border-b border-border bg-elevated px-4 py-3">
         <div className="flex items-center gap-2">
-          <ShieldCheck className="h-3.5 w-3.5 text-[var(--brand-teal)]" />
-          <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--brand-deep)]">
-            Fidelity Audit
-          </span>
+          <ShieldCheck className="h-3.5 w-3.5 text-accent" />
+          <span className="text-xs font-medium text-foreground">Fidelity audit</span>
         </div>
         <div className="flex items-baseline gap-1.5">
-          <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-            Weighted
-          </span>
-          <span className="font-display text-2xl text-[var(--brand-teal)]">
+          <span className="text-[11px] text-muted-foreground">Weighted</span>
+          <span className="text-2xl font-semibold tabular-nums text-accent">
             {(data.weighted * 100).toFixed(0)}
           </span>
           <span className="text-xs text-muted-foreground">/100</span>
@@ -796,17 +826,19 @@ function Scorecard({ data }: { data: EvaluationResult }) {
         <tbody className="divide-y divide-border text-sm">
           {data.rows.map((r) => (
             <tr key={r.dimension}>
-              <td className="px-4 py-2.5 font-medium text-[var(--brand-deep)] w-1/3">{r.dimension}</td>
+              <td className="w-1/3 px-4 py-2.5 font-medium text-foreground">
+                {r.dimension}
+              </td>
               <td className="px-4 py-2.5 text-xs text-muted-foreground">{r.note}</td>
-              <td className="px-4 py-2.5 w-32">
+              <td className="w-32 px-4 py-2.5">
                 <div className="flex items-center gap-2">
-                  <div className="h-1.5 flex-1 rounded-full bg-muted overflow-hidden">
+                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
                     <div
-                      className="h-full rounded-full bg-[var(--brand-teal)]"
+                      className="h-full rounded-full bg-accent"
                       style={{ width: `${r.score * 100}%` }}
                     />
                   </div>
-                  <span className="font-mono text-[10px] text-[var(--brand-deep)] w-8 text-right">
+                  <span className="w-8 text-right font-mono text-[11px] text-foreground">
                     {(r.score * 100).toFixed(0)}
                   </span>
                 </div>

@@ -337,7 +337,7 @@ function Index() {
               <ShieldCheck className="h-5 w-5" strokeWidth={2.25} />
             </div>
             <div className="flex flex-col leading-tight">
-              <span className="font-display text-lg italic tracking-tight text-[var(--brand-deep)]">
+              <span className="font-display text-lg italic tracking-tight text-foreground">
                 Verdant
               </span>
               <span className="font-mono text-[9px] uppercase tracking-[0.18em] text-muted-foreground">

@@ -388,21 +388,24 @@ function Index() {
         )}
       </nav>
 
-      <main className="mx-auto max-w-5xl px-6 pt-12 pb-24">
-        {/* Hero */}
-        <header className="mb-14 max-w-3xl">
-          <div className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 mb-5">
-            <span className="h-1.5 w-1.5 rounded-full bg-[var(--brand-orange)]" />
-            <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-              Counterparty Due Diligence
-            </span>
+      <main className="mx-auto max-w-5xl px-6 pt-10 pb-24">
+        {/* Hero — visual only */}
+        <header className="relative mb-14 h-56 sm:h-72 overflow-hidden rounded-3xl border border-border bg-card/40 backdrop-blur-sm shadow-[var(--shadow-soft)]">
+          <div className="absolute inset-0 bg-grid opacity-40" />
+          <div className="absolute -top-32 -left-24 h-[420px] w-[420px] rounded-full hero-orb opacity-80" />
+          <div className="absolute -bottom-40 -right-20 h-[360px] w-[360px] rounded-full hero-orb opacity-60" style={{ animationDirection: "reverse" }} />
+          <div className="absolute inset-6 rounded-2xl hero-ring" />
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="relative flex h-24 w-24 items-center justify-center rounded-2xl border border-[var(--brand-teal)]/30 bg-[var(--brand-deep)]/60 backdrop-blur-md shadow-[var(--shadow-glow)]">
+              <ShieldCheck className="h-10 w-10 text-[var(--brand-teal)] text-glow" strokeWidth={1.75} />
+              <span className="absolute -inset-1 rounded-2xl border border-[var(--brand-teal)]/20 animate-[pulseSlow_3s_ease-in-out_infinite]" />
+            </div>
           </div>
-          <h1 className="font-display text-5xl sm:text-6xl leading-[1.02] tracking-tight text-[var(--brand-deep)]">
-            Know who you're <em className="text-[var(--brand-teal)]">really</em> dealing with.
-          </h1>
-          <p className="mt-5 text-base text-muted-foreground max-w-xl leading-relaxed">
-            Upload a counterparty filing and Verdant maps its financial profile, peers, and risk surface into a queryable knowledge graph — with every answer auditable down to its source.
-          </p>
+          <div className="absolute bottom-4 left-6 right-6 flex items-center justify-between font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground/70">
+            <span>● Live engine</span>
+            <span>Verdant · KYC</span>
+            <span className="hidden sm:inline">Graph · Audit · Trust</span>
+          </div>
         </header>
 
         {/* PHASE 1 */}

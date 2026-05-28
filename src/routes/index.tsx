@@ -964,25 +964,30 @@ function CitedText({
 }
 
 // ---------------------------------------------------------------------------
-// ReasoningTrace — collapsible chain-of-thought
+// ReasoningTrace — Claude-style muted "thought" block shown UNDER the answer
 // ---------------------------------------------------------------------------
 
 function ReasoningTrace({ trace }: { trace: string }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   return (
-    <div className="mt-3 rounded-lg border border-border bg-[var(--panel)] overflow-hidden">
+    <div className="mt-4 rounded-lg border border-border/60 bg-[var(--panel)]/60 overflow-hidden">
       <button
         onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center justify-between px-3 py-2 text-left"
+        className="w-full flex items-center justify-between px-3 py-2 text-left hover:bg-muted/40 transition-colors"
       >
-        <span className="font-mono text-[10px] uppercase tracking-widest text-foreground">
-          Reasoning trace
+        <span className="flex items-center gap-2 text-[11px] italic text-muted-foreground">
+          <Sparkles className="h-3 w-3 opacity-60" />
+          Reasoning
         </span>
-        <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`} />
+        <ChevronDown
+          className={`h-3.5 w-3.5 text-muted-foreground/70 transition-transform ${
+            open ? "rotate-180" : ""
+          }`}
+        />
       </button>
       {open && (
-        <div className="px-3 pb-3">
-          <pre className="whitespace-pre-wrap text-[10px] font-mono text-muted-foreground leading-relaxed max-h-96 overflow-y-auto">
+        <div className="px-4 pb-3 pt-1 border-t border-border/40">
+          <pre className="whitespace-pre-wrap text-[12px] font-sans text-muted-foreground/80 leading-relaxed max-h-96 overflow-y-auto italic">
             {trace}
           </pre>
         </div>
@@ -998,12 +1003,14 @@ function ReasoningTrace({ trace }: { trace: string }) {
 function MessageBubble({
   message,
   onEvaluate,
+  sourceFileName,
 }: {
   message: ChatMessage;
   onEvaluate: (testType: string) => void;
+  sourceFileName?: string | null;
 }) {
   const [traceOpen, setTraceOpen] = useState(false);
-  const [selectedEval, setSelectedEval] = useState(EVAL_TESTS[0].value);
+  const [selectedEval, setSelectedEval] = useState("overall_score");
 
   if (message.role === "user") {
     return (

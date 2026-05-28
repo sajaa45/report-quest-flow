@@ -829,9 +829,11 @@ const _CITE_RE = /\[CITE:([^\]]+)\]/g;
 function CitedText({
   text,
   citations,
+  sourceFileName,
 }: {
   text: string;
   citations?: Record<string, CitationInfo>;
+  sourceFileName?: string | null;
 }) {
   // Build ordered list of unique citation IDs as they appear in the text
   const citeOrder: string[] = [];

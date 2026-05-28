@@ -1083,24 +1083,34 @@ function MessageBubble({
           {isThinking ? (
             <div className="h-4 w-2/3 rounded shimmer-bg" />
           ) : (
-            <CitedText text={message.content} citations={message.citations} />
+            <CitedText
+              text={message.content}
+              citations={message.citations}
+              sourceFileName={sourceFileName}
+            />
           )}
 
-          {/* Reasoning trace (LLM chain-of-thought) */}
+          {/* Reasoning trace (LLM chain-of-thought) — Claude-style muted block */}
           {message.reasoning_trace && (
             <ReasoningTrace trace={message.reasoning_trace} />
           )}
 
-          {/* Evaluation CTA */}
+          {/* Evaluation panel — always visible after the answer, with test switcher */}
           {!isThinking && traceDone && (
-            <div className="mt-4">
-              {!message.evaluation && !message.evaluating && (
-                <div className="flex items-center gap-2 flex-wrap">
-                  <ShieldCheck className="h-3.5 w-3.5 text-[var(--accent)] shrink-0" />
+            <div className="mt-5 rounded-xl border border-border bg-[var(--panel)]/50 overflow-hidden">
+              <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-border/60">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="h-3.5 w-3.5 text-[var(--accent)]" />
+                  <span className="font-mono text-[10px] uppercase tracking-widest text-foreground">
+                    Fidelity Audit
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
                   <select
                     value={selectedEval}
                     onChange={(e) => setSelectedEval(e.target.value)}
-                    className="rounded-md border border-input bg-background px-2 py-1 text-[11px] font-mono outline-none focus:ring-1 focus:ring-ring text-foreground"
+                    disabled={message.evaluating}
+                    className="rounded-md border border-input bg-background px-2 py-1 text-[11px] font-mono outline-none focus:ring-1 focus:ring-ring text-foreground disabled:opacity-50"
                   >
                     {EVAL_TESTS.map((t) => (
                       <option key={t.value} value={t.value}>{t.label}</option>
@@ -1108,19 +1118,30 @@ function MessageBubble({
                   </select>
                   <button
                     onClick={() => onEvaluate(selectedEval)}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-[var(--accent)]/40 bg-[color-mix(in_oklab,var(--accent)_6%,transparent)] px-3 py-1.5 text-[11px] font-semibold text-foreground hover:bg-[color-mix(in_oklab,var(--accent)_12%,transparent)] transition-all"
+                    disabled={message.evaluating}
+                    className="inline-flex items-center gap-1.5 rounded-md bg-[var(--accent)] text-white px-3 py-1 text-[11px] font-semibold hover:brightness-110 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-[var(--shadow-soft)]"
                   >
-                    Run audit
+                    {message.evaluation && message.evalType === selectedEval ? "Re-run" : "Run"}
                   </button>
                 </div>
-              )}
+              </div>
+
               {message.evaluating && (
-                <div className="inline-flex items-center gap-2 text-[11px] text-muted-foreground font-mono uppercase tracking-widest">
+                <div className="flex items-center gap-2 px-4 py-4 text-[11px] text-muted-foreground font-mono uppercase tracking-widest">
                   <span className="h-1.5 w-1.5 rounded-full bg-[var(--warning)] animate-pulse" />
                   Running {EVAL_TESTS.find((t) => t.value === message.evalType)?.label ?? "audit"}…
                 </div>
               )}
-              {message.evaluation && <Scorecard data={message.evaluation} />}
+
+              {!message.evaluating && !message.evaluation && (
+                <div className="px-4 py-4 text-[11px] text-muted-foreground italic">
+                  Pick a test above and run it to score this answer.
+                </div>
+              )}
+
+              {message.evaluation && !message.evaluating && (
+                <Scorecard data={message.evaluation} />
+              )}
             </div>
           )}
         </div>

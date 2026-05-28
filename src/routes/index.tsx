@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import {
   Upload,
@@ -10,11 +10,8 @@ import {
   Send,
   ShieldCheck,
   Sparkles,
+  Building2,
   ChevronDown,
-  Network,
-  ScanSearch,
-  Gauge,
-  X,
 } from "lucide-react";
 import { StepItem, type StepData, type StepStatus } from "@/components/StepItem";
 import {
@@ -30,19 +27,41 @@ export const Route = createFileRoute("/")({
 
 type PhaseStatus = "idle" | "running" | "complete" | "failed";
 
+interface CitationInfo {
+  type: "risk" | "metric";
+  company: string;
+  role: "target" | "peer";
+  document_url: string | null;
+  summary: string;
+  page?: number | string | null;
+}
+
 interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
+  reasoning_trace?: string | null;
+  citations?: Record<string, CitationInfo>;
   trace?: { step: string; status: string }[];
   evaluation?: EvaluationResult | null;
   evaluating?: boolean;
+  evalType?: string;
 }
 
 interface EvaluationResult {
+  test_type: string;
   rows: { dimension: string; score: number; note: string }[];
   weighted: number;
 }
+
+const EVAL_TESTS: { value: string; label: string }[] = [
+  { value: "answer_relevancy",           label: "Answer Relevancy" },
+  { value: "context_precision",          label: "Context Precision" },
+  { value: "answer_source_traceability", label: "Source Traceability" },
+  { value: "target_validation",          label: "Target Extraction" },
+  { value: "risk_peers_validation",      label: "Peer Risk Validation" },
+  { value: "overall_score",              label: "Overall Score" },
+];
 
 function fmtBytes(n: number) {
   if (n < 1024) return `${n} B`;
@@ -51,14 +70,15 @@ function fmtBytes(n: number) {
 }
 
 const QA_TRACE_STEPS = [
-  "Cypher translation",
-  "Graph traversal",
-  "Context retrieval",
-  "Answer generation",
-  "Citation attachment",
+  "cypher_translation",
+  "graph_traversal",
+  "context_retrieval",
+  "answer_generation",
+  "citation_attachment",
 ];
 
 function Index() {
+  // -------- Backend config --------
   const [backendUrl, setBackendUrlState] = useState(DEFAULT_BACKEND_URL);
   const [showSettings, setShowSettings] = useState(false);
   const [connected, setConnected] = useState<boolean | null>(null);
@@ -77,29 +97,63 @@ function Index() {
         if (!cancelled) setConnected(false);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [backendUrl]);
 
+  // On startup, ask the backend if Neo4j already has data.
+  // This unlocks QA even when the pipeline was run outside the UI (e.g. via CLI).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`${backendUrl}/qa/ready`);
+        if (!cancelled && r.ok) {
+          const data = await r.json();
+          if (data.ready) {
+            setPhase1Status((prev) => (prev === "idle" ? "complete" : prev));
+          }
+        }
+      } catch { /* backend may not be up yet — ignore */ }
+    })();
+    return () => { cancelled = true; };
+  }, [backendUrl]);
+
+  // -------- Phase 1 state --------
   const [file, setFile] = useState<File | null>(null);
   const [fiscalYear, setFiscalYear] = useState("2024");
-  const [phase1Status, setPhase1Status] = useState<PhaseStatus>("idle");
+  const [previousFilename, setPreviousFilename] = useState<string | null>(() => {
+    try { return localStorage.getItem("verdant_filename"); } catch { return null; }
+  });
+  const [savedJobId, setSavedJobId] = useState<string | null>(() => {
+    try { return localStorage.getItem("verdant_job_id"); } catch { return null; }
+  });
+
+  // Restore completion from a previous session stored in localStorage
+  const [phase1Status, setPhase1Status] = useState<PhaseStatus>(() => {
+    try {
+      return localStorage.getItem("verdant_phase1_status") === "complete" ? "complete" : "idle";
+    } catch { return "idle"; }
+  });
   const [phase1Error, setPhase1Error] = useState<string | null>(null);
-  const [steps, setSteps] = useState<StepData[]>(() =>
-    PIPELINE_STEPS.map((s) => ({
+  const [steps, setSteps] = useState<StepData[]>(() => {
+    try {
+      const saved = localStorage.getItem("verdant_steps");
+      if (saved) return JSON.parse(saved) as StepData[];
+    } catch { /* ignore */ }
+    return PIPELINE_STEPS.map((s) => ({
       id: s.id,
       label: s.label,
       description: s.description,
       status: "pending" as StepStatus,
       logs: [],
-    })),
-  );
+    }));
+  });
   const stepStartRef = useRef<Record<number, number>>({});
   const eventSourceRef = useRef<EventSource | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
 
+  // -------- Phase 2: QA chat --------
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [question, setQuestion] = useState("");
   const [asking, setAsking] = useState(false);
@@ -118,8 +172,76 @@ function Index() {
     stepStartRef.current = {};
   }, []);
 
+  // Attach SSE listener for a running job — shared by runPipeline and resumePipeline
+  const startListening = useCallback((jobId: string, currentFile: File | null) => {
+    const es = new EventSource(`${backendUrl}/pipeline/${jobId}/stream`);
+    eventSourceRef.current = es;
+
+    es.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data);
+        if (data.type === "pipeline_complete") {
+          setPhase1Status("complete");
+          setSteps((prev) => {
+            try { localStorage.setItem("verdant_steps", JSON.stringify(prev)); } catch { /* ignore */ }
+            return prev;
+          });
+          try {
+            localStorage.setItem("verdant_phase1_status", "complete");
+            if (currentFile) localStorage.setItem("verdant_filename", currentFile.name);
+          } catch { /* ignore */ }
+          es.close();
+          return;
+        }
+        if (data.type === "pipeline_failed") {
+          setPhase1Status("failed");
+          setPhase1Error(data.error || "Pipeline failed");
+          es.close();
+          return;
+        }
+        const stepId = data.step as number;
+        if (!stepId) return;
+        setSteps((prev) =>
+          prev.map((s) => {
+            if (s.id !== stepId) return s;
+            const next: StepData = { ...s };
+            if (data.status === "running") {
+              next.status = "running";
+              if (!stepStartRef.current[stepId]) stepStartRef.current[stepId] = Date.now();
+              if (data.message) next.logs = [...(s.logs || []), data.message];
+            } else if (data.status === "done") {
+              next.status = "done";
+              next.summary = data.summary || data.message;
+              const start = stepStartRef.current[stepId];
+              if (start) next.durationMs = Date.now() - start;
+            } else if (data.status === "failed") {
+              next.status = "failed";
+              next.summary = data.error || data.message || "Step failed";
+            }
+            return next;
+          }),
+        );
+      } catch (e) {
+        console.error("Failed to parse SSE event", e);
+      }
+    };
+
+    es.onerror = () => {
+      es.close();
+      setPhase1Status((prev) => (prev === "running" ? "failed" : prev));
+    };
+  }, [backendUrl]);
+
   const runPipeline = useCallback(async () => {
     if (!file) return;
+    try {
+      localStorage.removeItem("verdant_phase1_status");
+      localStorage.removeItem("verdant_steps");
+      localStorage.removeItem("verdant_filename");
+      localStorage.removeItem("verdant_job_id");
+    } catch { /* ignore */ }
+    setPreviousFilename(null);
+    setSavedJobId(null);
     setPhase1Error(null);
     setPhase1Status("running");
     setMessages([]);
@@ -136,73 +258,77 @@ function Index() {
         throw new Error(`Upload failed (${r.status}): ${t}`);
       }
       const { job_id } = (await r.json()) as { job_id: string };
-
-      const es = new EventSource(`${backendUrl}/pipeline/${job_id}/stream`);
-      eventSourceRef.current = es;
-
-      es.onmessage = (ev) => {
-        try {
-          const data = JSON.parse(ev.data);
-          if (data.type === "pipeline_complete") {
-            setPhase1Status("complete");
-            es.close();
-            return;
-          }
-          if (data.type === "pipeline_failed") {
-            setPhase1Status("failed");
-            setPhase1Error(data.error || "Pipeline failed");
-            es.close();
-            return;
-          }
-          const stepId = data.step as number;
-          if (!stepId) return;
-          setSteps((prev) =>
-            prev.map((s) => {
-              if (s.id !== stepId) return s;
-              const next: StepData = { ...s };
-              if (data.status === "running") {
-                next.status = "running";
-                if (!stepStartRef.current[stepId]) stepStartRef.current[stepId] = Date.now();
-                if (data.message) next.logs = [...(s.logs || []), data.message];
-              } else if (data.status === "done") {
-                next.status = "done";
-                next.summary = data.summary || data.message;
-                const start = stepStartRef.current[stepId];
-                if (start) next.durationMs = Date.now() - start;
-              } else if (data.status === "failed") {
-                next.status = "failed";
-                next.summary = data.error || data.message || "Step failed";
-              }
-              return next;
-            }),
-          );
-        } catch (e) {
-          console.error("Failed to parse SSE event", e);
-        }
-      };
-
-      es.onerror = () => {
-        es.close();
-        setPhase1Status((prev) => (prev === "running" ? "failed" : prev));
-      };
+      try { localStorage.setItem("verdant_job_id", job_id); } catch { /* ignore */ }
+      setSavedJobId(job_id);
+      startListening(job_id, file);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Unknown error";
       setPhase1Error(msg);
       setPhase1Status("failed");
     }
-  }, [file, fiscalYear, backendUrl, resetSteps]);
+  }, [file, fiscalYear, backendUrl, resetSteps, startListening]);
 
-  useEffect(() => () => eventSourceRef.current?.close(), []);
+  const resumePipeline = useCallback(async () => {
+    // Find the first step that isn't done — that's where we resume from.
+    const firstIncompleteIdx = steps.findIndex((s) => s.status !== "done");
+    const startFromStep = firstIncompleteIdx + 1; // convert 0-indexed → 1-indexed step ID
+
+    // Resume is only possible from step 3+ (steps 1-2 require the original file).
+    if (!savedJobId || firstIncompleteIdx <= 0 || startFromStep < 3) {
+      runPipeline();
+      return;
+    }
+
+    // Keep done steps as-is; reset incomplete steps to pending.
+    setSteps((prev) =>
+      prev.map((s) => ({
+        ...s,
+        status:     Number(s.id) < startFromStep ? s.status     : ("pending" as StepStatus),
+        logs:       Number(s.id) < startFromStep ? s.logs       : [],
+        summary:    Number(s.id) < startFromStep ? s.summary    : undefined,
+        durationMs: Number(s.id) < startFromStep ? s.durationMs : undefined,
+      })),
+    );
+    stepStartRef.current = {};
+    setPhase1Error(null);
+    setPhase1Status("running");
+
+    try {
+      const r = await fetch(`${backendUrl}/pipeline/resume`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prev_job_id:     savedJobId,
+          start_from_step: startFromStep,
+          fiscal_year:     fiscalYear,
+        }),
+      });
+      if (!r.ok) throw new Error(`Resume failed (${r.status}): ${await r.text()}`);
+      const { job_id } = (await r.json()) as { job_id: string };
+      try { localStorage.setItem("verdant_job_id", job_id); } catch { /* ignore */ }
+      setSavedJobId(job_id);
+      startListening(job_id, file);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Unknown error";
+      setPhase1Error(msg);
+      setPhase1Status("failed");
+    }
+  }, [steps, savedJobId, fiscalYear, backendUrl, file, runPipeline, startListening]);
 
   useEffect(() => {
+    return () => {
+      eventSourceRef.current?.close();
+    };
+  }, []);
+
+  // Smooth scroll to QA when Phase 1 completes
+  useEffect(() => {
     if (phase1Status === "complete") {
-      setTimeout(
-        () => phase2Ref.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
-        400,
-      );
+      setTimeout(() => phase2Ref.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 400);
     }
   }, [phase1Status]);
 
+  // -------- QA submit --------
   const askQuestion = useCallback(async () => {
     const q = question.trim();
     if (!q || asking) return;
@@ -217,8 +343,11 @@ function Index() {
     setQuestion("");
     setAsking(true);
 
-    for (let i = 0; i < QA_TRACE_STEPS.length; i++) {
-      await new Promise((r) => setTimeout(r, 420));
+    // Animate trace steps while the real request is in flight
+    let stepIdx = 0;
+    const stepTimer = setInterval(() => {
+      if (stepIdx >= QA_TRACE_STEPS.length) { clearInterval(stepTimer); return; }
+      const current = stepIdx;
       setMessages((m) =>
         m.map((msg) =>
           msg.id === placeholder.id
@@ -226,15 +355,18 @@ function Index() {
                 ...msg,
                 trace: msg.trace?.map((t, idx) => ({
                   ...t,
-                  status: idx < i + 1 ? "done" : idx === i + 1 ? "running" : "pending",
+                  status: idx < current ? "done" : idx === current ? "running" : "pending",
                 })),
               }
             : msg,
         ),
       );
-    }
+      stepIdx++;
+    }, 700);
 
     let answer = "";
+    let citations: Record<string, CitationInfo> = {};
+    let reasoning_trace: string | null = null;
     try {
       const r = await fetch(`${backendUrl}/qa/run`, {
         method: "POST",
@@ -243,50 +375,53 @@ function Index() {
       });
       if (r.ok) {
         const data = await r.json();
-        answer = data.answer || JSON.stringify(data);
-      } else throw new Error();
-    } catch {
-      answer =
-        "Based on the ingested filing and peer knowledge graph, the company reports total revenue concentration with its top three customers exceeding 40%, and its risk profile aligns closely with two of the five identified peers. Operating margin sits roughly 180 bps below the peer median.";
+        answer = data.answer || "";
+        citations = data.citations || {};
+        reasoning_trace = data.reasoning_trace || null;
+      } else {
+        answer = `Error ${r.status}: ${await r.text()}`;
+      }
+    } catch (e: unknown) {
+      answer = e instanceof Error ? e.message : "Request failed";
     }
 
+    clearInterval(stepTimer);
     setMessages((m) =>
       m.map((msg) =>
         msg.id === placeholder.id
-          ? { ...msg, content: answer, trace: msg.trace?.map((t) => ({ ...t, status: "done" })) }
+          ? {
+              ...msg,
+              content: answer,
+              citations,
+              reasoning_trace,
+              trace: msg.trace?.map((t) => ({ ...t, status: "done" })),
+            }
           : msg,
       ),
     );
     setAsking(false);
   }, [question, asking, backendUrl]);
 
+  // -------- Evaluation (per-message, user-chosen test type) --------
   const runEvaluation = useCallback(
-    async (messageId: string) => {
+    async (messageId: string, testType: string) => {
       setMessages((m) =>
-        m.map((msg) => (msg.id === messageId ? { ...msg, evaluating: true } : msg)),
+        m.map((msg) =>
+          msg.id === messageId ? { ...msg, evaluating: true, evalType: testType } : msg,
+        ),
       );
 
       let result: EvaluationResult | null = null;
       try {
-        const msg = messages.find((x) => x.id === messageId);
         const r = await fetch(`${backendUrl}/eval/run`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ answer: msg?.content }),
+          body: JSON.stringify({ test_type: testType }),
         });
         if (r.ok) result = await r.json();
-        else throw new Error();
-      } catch {
-        await new Promise((r) => setTimeout(r, 900));
-        result = {
-          rows: [
-            { dimension: "Claim decomposition", score: 0.94, note: "8 atomic claims extracted" },
-            { dimension: "Source matching", score: 0.88, note: "7/8 claims matched to XBRL / HTM" },
-            { dimension: "Faithfulness judge", score: 0.91, note: "LLM-judge avg across claims" },
-            { dimension: "Hallucination check", score: 0.97, note: "No unsupported claims detected" },
-          ],
-          weighted: 0.92,
-        };
+        else throw new Error(`${r.status}: ${await r.text()}`);
+      } catch (e) {
+        console.error("Eval error:", e);
       }
 
       setMessages((m) =>
@@ -295,8 +430,21 @@ function Index() {
         ),
       );
     },
-    [backendUrl, messages],
+    [backendUrl],
   );
+
+  const phase1Badge = (() => {
+    switch (phase1Status) {
+      case "complete":
+        return { text: "Profile Ready", cls: "text-[var(--accent)] bg-[color-mix(in_oklab,var(--accent)_10%,transparent)] ring-[color-mix(in_oklab,var(--accent)_30%,transparent)]" };
+      case "running":
+        return { text: "Ingesting", cls: "text-[var(--warning)] bg-[color-mix(in_oklab,var(--warning)_10%,transparent)] ring-[color-mix(in_oklab,var(--warning)_30%,transparent)]" };
+      case "failed":
+        return { text: "Failed", cls: "text-destructive bg-destructive/5 ring-destructive/20" };
+      default:
+        return { text: "Awaiting Filing", cls: "text-muted-foreground bg-muted ring-border" };
+    }
+  })();
 
   const handleFiles = (files: FileList | null) => {
     if (!files || !files[0]) return;
@@ -304,34 +452,48 @@ function Index() {
   };
 
   const phase1Done = phase1Status === "complete";
-  const stepsCompleted = steps.filter((s) => s.status === "done").length;
+
+  // Resume is available when the pipeline failed partway through and we have
+  // a saved job_id with at least one completed step at step 3 or later.
+  const firstIncompleteIdx = steps.findIndex((s) => s.status !== "done");
+  const resumeFromStep     = firstIncompleteIdx + 1; // 1-indexed
+  const canResume =
+    phase1Status === "failed" &&
+    !!savedJobId &&
+    steps.some((s) => s.status === "done") &&
+    resumeFromStep >= 3;
 
   return (
-    <div className="min-h-screen font-sans text-foreground selection:bg-accent/30">
+    <div className="min-h-screen font-sans text-foreground selection:bg-[color-mix(in_oklab,var(--accent)_25%,transparent)]">
       {/* Nav */}
-      <nav className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-xl">
-        <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-6">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-7 w-7 items-center justify-center rounded-md bg-accent/15 text-accent ring-1 ring-accent/25">
-              <ShieldCheck className="h-4 w-4" strokeWidth={2.25} />
+      <nav className="sticky top-0 z-50 border-b border-border bg-background/75 backdrop-blur-xl">
+        <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-6">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--elevated)] text-[var(--accent)] shadow-[var(--shadow-soft)]">
+              <ShieldCheck className="h-5 w-5" strokeWidth={2.25} />
             </div>
-            <span className="text-[15px] font-semibold tracking-tight text-foreground">
-              Verdant
-            </span>
+            <div className="flex flex-col leading-tight">
+              <span className="font-sans text-lg italic tracking-tight text-foreground">
+                Verdant
+              </span>
+              <span className="font-mono text-[9px] uppercase tracking-[0.18em] text-muted-foreground">
+                KYC Intelligence
+              </span>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <div className="hidden sm:flex items-center gap-2 rounded-full border border-border bg-card px-2.5 py-1">
-              <span
+          <div className="flex items-center gap-4">
+            <div className="hidden sm:flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5">
+              <div
                 className={`h-1.5 w-1.5 rounded-full ${
                   connected === null
                     ? "bg-muted-foreground/40"
                     : connected
-                    ? "bg-accent"
+                    ? "bg-[var(--accent)]"
                     : "bg-destructive"
                 }`}
               />
-              <span className="text-[11px] text-muted-foreground">
-                {connected === null ? "Checking" : connected ? "Operational" : "Offline"}
+              <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                {connected === null ? "Checking" : connected ? "Engine online" : "Engine offline"}
               </span>
             </div>
             <button
@@ -344,90 +506,61 @@ function Index() {
           </div>
         </div>
         {showSettings && (
-          <div className="border-t border-border bg-panel">
-            <div className="mx-auto flex max-w-6xl items-center gap-3 px-6 py-3">
-              <label className="text-xs text-muted-foreground">Backend URL</label>
+          <div className="border-t border-border bg-card">
+            <div className="mx-auto max-w-5xl px-6 py-3 flex items-center gap-3">
+              <label className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                Backend URL
+              </label>
               <input
                 type="text"
                 value={backendUrl}
                 onChange={(e) => setBackendUrlState(e.target.value)}
                 onBlur={(e) => setBackendUrl(e.target.value)}
                 placeholder="http://localhost:8000"
-                className="flex-1 rounded-md border border-input bg-background px-3 py-1.5 font-mono text-xs outline-none focus:ring-2 focus:ring-ring"
+                className="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-mono outline-none focus:ring-2 focus:ring-ring"
               />
             </div>
           </div>
         )}
       </nav>
 
-      <main className="mx-auto max-w-6xl px-6 pt-12 pb-24">
+      <main className="mx-auto max-w-5xl px-6 pt-12 pb-24">
         {/* Hero */}
-        <header className="mb-12" style={{ animation: "slideUp 0.5s var(--ease-out-expo) both" }}>
-          <div className="grid gap-8 md:grid-cols-[1.4fr_1fr] md:items-end">
-            <div>
-              <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-border bg-card px-2.5 py-1 text-[11px] text-muted-foreground">
-                <span className="h-1.5 w-1.5 rounded-full bg-accent" />
-                KYC Intelligence Platform
-              </div>
-              <h1 className="text-balance text-4xl font-semibold tracking-tight text-foreground sm:text-[44px] sm:leading-[1.05]">
-                Know who you're really dealing with.
-              </h1>
-              <p className="mt-4 max-w-lg text-[15px] leading-relaxed text-muted-foreground">
-                Ingest counterparty filings, extract structured entities, and query an
-                auditable knowledge graph &mdash; built for banks and enterprises that
-                can't afford to guess.
-              </p>
-            </div>
-
-            {/* Summary panel */}
-            <div className="rounded-xl border border-border bg-card p-4 shadow-[var(--shadow-soft)]">
-              <div className="mb-3 flex items-center justify-between">
-                <span className="text-xs font-medium text-muted-foreground">
-                  Session overview
-                </span>
-                <span className="text-[10px] text-muted-foreground/70">Live</span>
-              </div>
-              <div className="grid grid-cols-3 gap-3">
-                <StatCard
-                  icon={<FileText className="h-3.5 w-3.5" />}
-                  label="Filing"
-                  value={file ? "1" : "0"}
-                />
-                <StatCard
-                  icon={<Network className="h-3.5 w-3.5" />}
-                  label="Steps"
-                  value={`${stepsCompleted}/${steps.length}`}
-                />
-                <StatCard
-                  icon={<Gauge className="h-3.5 w-3.5" />}
-                  label="Status"
-                  value={
-                    phase1Status === "complete"
-                      ? "Ready"
-                      : phase1Status === "running"
-                      ? "Running"
-                      : phase1Status === "failed"
-                      ? "Failed"
-                      : "Idle"
-                  }
-                  emphasis={phase1Status === "complete"}
-                />
-              </div>
-            </div>
+        <header className="mb-14 max-w-3xl">
+          <div className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 mb-5">
+            <span className="h-1.5 w-1.5 rounded-full bg-[var(--warning)]" />
+            <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+              Counterparty Due Diligence
+            </span>
           </div>
+          <h1 className="font-sans text-5xl sm:text-6xl leading-[1.02] tracking-tight text-foreground">
+            Know who you're <em className="text-[var(--accent)]">really</em> dealing with.
+          </h1>
+          <p className="mt-5 text-base text-muted-foreground max-w-xl leading-relaxed">
+            Upload a counterparty filing and Verdant maps its financial profile, peers, and risk surface into a queryable knowledge graph — with every answer auditable down to its source.
+          </p>
         </header>
 
         {/* PHASE 1 */}
         <section style={{ animation: "slideUp 0.6s var(--ease-out-expo) both" }}>
           <PhaseHeader
-            index="01"
-            title="Counterparty filing"
+            kicker="01 — Ingestion"
+            title="Counterparty Filing"
             subtitle="Drop a 10-K, annual report, or registration document. Verdant parses it into structured entities and a graph."
+            badge={phase1Badge}
           />
 
-          <div className="grid gap-5">
+          <div className="grid gap-6">
             {/* Upload card */}
-            <div className="overflow-hidden rounded-xl border border-border bg-card shadow-[var(--shadow-soft)]">
+            <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-[var(--shadow-soft)]">
+              <div className="border-b border-border bg-[var(--panel)] px-5 py-3 flex items-center justify-between">
+                <div className="flex items-center gap-2 text-foreground">
+                  <Building2 className="h-3.5 w-3.5" />
+                  <span className="font-mono text-[10px] uppercase tracking-widest">Subject Entity</span>
+                </div>
+                <span className="font-mono text-[10px] text-muted-foreground">.html · .htm · .pdf</span>
+              </div>
+
               <div className="p-5">
                 <label
                   onDragOver={(e) => {
@@ -440,10 +573,10 @@ function Index() {
                     setDragOver(false);
                     handleFiles(e.dataTransfer.files);
                   }}
-                  className={`relative flex h-44 w-full cursor-pointer flex-col items-center justify-center gap-3 rounded-lg border border-dashed transition-all ${
+                  className={`relative flex h-36 w-full cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed transition-all ${
                     dragOver
-                      ? "border-accent bg-accent/5"
-                      : "border-border bg-panel hover:border-accent/50 hover:bg-elevated"
+                      ? "border-[var(--accent)] bg-[color-mix(in_oklab,var(--accent)_5%,transparent)]"
+                      : "border-border hover:border-[var(--accent)]/50"
                   }`}
                 >
                   <input
@@ -453,69 +586,68 @@ function Index() {
                     className="hidden"
                     onChange={(e) => handleFiles(e.target.files)}
                   />
-                  <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-elevated text-accent ring-1 ring-border">
-                    <Upload className="h-4.5 w-4.5" />
+                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--elevated)] text-[var(--accent)]">
+                    <Upload className="h-4 w-4" />
                   </div>
-                  <div className="text-center">
-                    <div className="text-sm font-medium text-foreground">
-                      Drop a filing here, or{" "}
-                      <span className="text-accent underline-offset-4 hover:underline">
-                        browse
-                      </span>
-                    </div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      Supports .html, .htm, .pdf &middot; up to 50 MB
-                    </div>
-                  </div>
+                  <span className="text-sm font-medium text-foreground">
+                    Drop a counterparty filing or <span className="text-[var(--accent)] underline-offset-4 hover:underline">browse files</span>
+                  </span>
+                  <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                    SEC 10-K · Annual Report · Registration Doc
+                  </span>
                 </label>
 
-                {/* File row + actions */}
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex min-w-0 items-center gap-3">
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-elevated ring-1 ring-border">
-                      <FileText className="h-4 w-4 text-muted-foreground" />
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="flex h-7 w-7 items-center justify-center rounded-md bg-muted shrink-0">
+                      <FileText className="h-3.5 w-3.5 text-muted-foreground" />
                     </div>
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-medium text-foreground">
-                        {file ? file.name : "No file selected"}
-                      </div>
-                      <div className="text-[11px] text-muted-foreground">
-                        {file ? fmtBytes(file.size) : "Awaiting upload"}
-                      </div>
-                    </div>
+                    <span className="text-sm font-medium truncate">
+                      {file
+                        ? file.name
+                        : previousFilename && phase1Status === "complete"
+                        ? previousFilename
+                        : "No file selected"}
+                    </span>
                     {file && (
-                      <button
-                        onClick={() => setFile(null)}
-                        className="ml-1 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-                        aria-label="Remove file"
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
+                      <span className="font-mono text-[10px] text-muted-foreground uppercase shrink-0">
+                        {fmtBytes(file.size)}
+                      </span>
+                    )}
+                    {!file && previousFilename && phase1Status === "complete" && (
+                      <span className="font-mono text-[10px] text-[var(--accent)] uppercase shrink-0">
+                        restored
+                      </span>
                     )}
                   </div>
-
                   <div className="flex items-center gap-2">
-                    <div className="flex items-center gap-2 rounded-md border border-input bg-background px-3 py-2">
-                      <label className="text-[11px] text-muted-foreground">Fiscal year</label>
+                    <div className="flex items-center gap-2 rounded-md border border-input bg-background px-2.5 py-1.5">
+                      <label className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                        FY
+                      </label>
                       <input
                         type="text"
                         value={fiscalYear}
                         onChange={(e) => setFiscalYear(e.target.value)}
-                        className="w-14 bg-transparent text-sm font-medium outline-none text-foreground"
+                        className="w-14 bg-transparent text-xs font-mono outline-none text-foreground"
                       />
                     </div>
                     <button
-                      onClick={runPipeline}
-                      disabled={!file || phase1Status === "running"}
-                      className="inline-flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-sm font-semibold text-accent-foreground transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
+                      onClick={canResume ? resumePipeline : runPipeline}
+                      disabled={(canResume ? false : !file) || phase1Status === "running"}
+                      className="group relative flex items-center gap-2 overflow-hidden rounded-md bg-[var(--elevated)] text-[var(--accent)] text-xs font-semibold px-4 py-2 transition-all hover:bg-[var(--elevated)] disabled:opacity-40 disabled:cursor-not-allowed shadow-[var(--shadow-soft)]"
                     >
-                      {phase1Status === "complete" || phase1Status === "failed" ? (
+                      {canResume ? (
                         <>
-                          <RotateCcw className="h-3.5 w-3.5" /> Re-run
+                          <RotateCcw className="h-3.5 w-3.5" /> Resume from step {resumeFromStep}
+                        </>
+                      ) : phase1Status === "complete" || phase1Status === "failed" ? (
+                        <>
+                          <RotateCcw className="h-3.5 w-3.5" /> Re-ingest
                         </>
                       ) : (
                         <>
-                          <Play className="h-3.5 w-3.5 fill-current" /> Run diligence
+                          <Play className="h-3.5 w-3.5 fill-current" /> Run Diligence
                         </>
                       )}
                     </button>
@@ -524,7 +656,7 @@ function Index() {
 
                 {phase1Error && (
                   <div className="mt-3 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-2.5 text-xs text-destructive">
-                    <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                     <span className="font-mono">{phase1Error}</span>
                   </div>
                 )}
@@ -534,22 +666,11 @@ function Index() {
             {/* Stepper */}
             {(phase1Status !== "idle" || steps.some((s) => s.status !== "pending")) && (
               <div
-                className="rounded-xl border border-border bg-card p-6 shadow-[var(--shadow-soft)]"
+                className="rounded-2xl border border-border bg-card p-6 shadow-[var(--shadow-soft)]"
                 style={{ animation: "fadeReveal 0.5s var(--ease-out-expo) both" }}
               >
-                <div className="mb-4 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <ScanSearch className="h-4 w-4 text-accent" />
-                    <span className="text-sm font-medium text-foreground">
-                      Pipeline progress
-                    </span>
-                  </div>
-                  <span className="text-xs text-muted-foreground">
-                    {stepsCompleted} / {steps.length} complete
-                  </span>
-                </div>
                 <div className="relative space-y-0 pl-2">
-                  <div className="absolute bottom-2 left-4 top-2 w-px bg-border" />
+                  <div className="absolute left-4 top-2 bottom-2 w-px bg-border" />
                   {steps.map((s, i) => (
                     <StepItem key={s.id} step={s} isLast={i === steps.length - 1} />
                   ))}
@@ -559,7 +680,35 @@ function Index() {
           </div>
         </section>
 
-        {/* PHASE 2 */}
+        {/* Summary panel — visible after pipeline completes */}
+        {phase1Done && (
+          <div
+            className="mt-8 rounded-2xl border border-border bg-card overflow-hidden shadow-[var(--shadow-soft)]"
+            style={{ animation: "fadeReveal 0.6s var(--ease-out-expo) both" }}
+          >
+            <div className="border-b border-border bg-[var(--panel)] px-5 py-3 flex items-center gap-2">
+              <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />
+              <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                Pipeline Summary
+              </span>
+            </div>
+            <div className="divide-y divide-border">
+              {steps.filter((s) => s.summary).map((s) => (
+                <div key={s.id} className="flex items-start gap-4 px-5 py-3">
+                  <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--accent)] w-4 shrink-0 mt-0.5">
+                    {String(s.id).padStart(2, "0")}
+                  </span>
+                  <span className="font-mono text-[10px] w-36 shrink-0 text-muted-foreground truncate">
+                    {s.label}
+                  </span>
+                  <span className="text-xs text-foreground leading-relaxed">{s.summary}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* PHASE 2 — appears smoothly after Phase 1 complete */}
         {phase1Done && (
           <section
             ref={phase2Ref}
@@ -567,35 +716,43 @@ function Index() {
             style={{ animation: "fadeReveal 0.8s var(--ease-out-expo) both" }}
           >
             <PhaseHeader
-              index="02"
+              kicker="02 — Inquiry"
               title="Ask about the counterparty"
               subtitle="Query the knowledge graph in natural language. Every answer ships with a process trace and can be audited on demand."
+              badge={{
+                text: "Ready",
+                cls: "text-[var(--accent)] bg-[color-mix(in_oklab,var(--accent)_10%,transparent)] ring-[color-mix(in_oklab,var(--accent)_30%,transparent)]",
+              }}
             />
 
-            <div className="overflow-hidden rounded-xl border border-border bg-card shadow-[var(--shadow-soft)]">
-              <div className="max-h-[520px] divide-y divide-border overflow-y-auto">
+            <div className="rounded-2xl border border-border bg-card shadow-[var(--shadow-soft)] overflow-hidden">
+              {/* Messages */}
+              <div className="divide-y divide-border max-h-[520px] overflow-y-auto">
                 {messages.length === 0 && (
                   <div className="p-10 text-center">
-                    <Sparkles className="mx-auto mb-3 h-5 w-5 text-accent" />
-                    <p className="mx-auto max-w-sm text-sm text-muted-foreground">
-                      Try:{" "}
-                      <span className="italic text-foreground">
-                        "What are this company's top concentration risks compared to its peers?"
-                      </span>
+                    <Sparkles className="h-5 w-5 mx-auto text-[var(--accent)] mb-3" />
+                    <p className="text-sm text-muted-foreground max-w-sm mx-auto">
+                      Try: <span className="text-foreground italic">"What are this company's top concentration risks compared to its peers?"</span>
                     </p>
                   </div>
                 )}
                 {messages.map((m) => (
-                  <MessageBubble key={m.id} message={m} onEvaluate={() => runEvaluation(m.id)} />
+                  <MessageBubble
+                    key={m.id}
+                    message={m}
+                    onEvaluate={(testType) => runEvaluation(m.id, testType)}
+                    sourceFileName={file?.name ?? previousFilename ?? null}
+                  />
                 ))}
               </div>
 
+              {/* Composer */}
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
                   askQuestion();
                 }}
-                className="flex items-center gap-2 border-t border-border bg-panel p-3"
+                className="border-t border-border bg-[var(--panel)] p-3 flex items-center gap-2"
               >
                 <input
                   type="text"
@@ -603,12 +760,12 @@ function Index() {
                   onChange={(e) => setQuestion(e.target.value)}
                   placeholder="Ask about risks, financials, peer comparisons…"
                   disabled={asking}
-                  className="flex-1 rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none transition-all placeholder:text-muted-foreground focus:ring-2 focus:ring-ring"
+                  className="flex-1 rounded-lg bg-card border border-input px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring transition-all placeholder:text-muted-foreground"
                 />
                 <button
                   type="submit"
                   disabled={!question.trim() || asking}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-accent-foreground transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
+                  className="flex items-center gap-1.5 rounded-lg bg-[var(--warning)] text-white text-xs font-semibold px-4 py-2.5 transition-all hover:brightness-105 disabled:opacity-40 disabled:cursor-not-allowed shadow-[var(--shadow-soft)]"
                 >
                   <Send className="h-3.5 w-3.5" /> Ask
                 </button>
@@ -618,13 +775,15 @@ function Index() {
         )}
 
         {/* Footer */}
-        <footer className="mt-24 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-6 text-xs text-muted-foreground">
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="h-3.5 w-3.5 text-accent" />
-            <span>Verdant &middot; Auditable by design</span>
+        <footer className="mt-24 pt-8 border-t border-border flex flex-wrap justify-between items-center gap-3">
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <ShieldCheck className="h-3.5 w-3.5 text-[var(--accent)]" />
+            <span className="text-[10px] font-mono uppercase tracking-widest">
+              Verdant · KYC Engine · Auditable by design
+            </span>
           </div>
-          <div className="font-mono text-[11px]">
-            backend &middot; {backendUrl.replace(/^https?:\/\//, "")}
+          <div className="text-[10px] text-muted-foreground font-mono">
+            backend · {backendUrl.replace(/^https?:\/\//, "")}
           </div>
         </footer>
       </main>
@@ -632,70 +791,231 @@ function Index() {
   );
 }
 
-function StatCard({
-  icon,
-  label,
-  value,
-  emphasis,
+function PhaseHeader({
+  kicker,
+  title,
+  subtitle,
+  badge,
 }: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  emphasis?: boolean;
+  kicker: string;
+  title: string;
+  subtitle: string;
+  badge: { text: string; cls: string };
 }) {
   return (
-    <div className="rounded-lg border border-border bg-panel p-3">
-      <div className="mb-2 flex items-center gap-1.5 text-muted-foreground">
-        {icon}
-        <span className="text-[11px]">{label}</span>
+    <div className="mb-8 flex items-start justify-between gap-4">
+      <div className="max-w-xl">
+        <div className="font-mono text-[10px] font-bold tracking-[0.2em] text-[var(--warning)] uppercase mb-2">
+          {kicker}
+        </div>
+        <h2 className="font-sans text-3xl tracking-tight text-foreground">{title}</h2>
+        <p className="mt-2 text-sm text-muted-foreground leading-relaxed">{subtitle}</p>
       </div>
-      <div
-        className={`text-lg font-semibold tabular-nums ${
-          emphasis ? "text-accent" : "text-foreground"
-        }`}
+      <span
+        className={`mt-1 text-[10px] font-mono uppercase tracking-widest px-2.5 py-1 rounded-full ring-1 whitespace-nowrap ${badge.cls}`}
       >
-        {value}
-      </div>
+        {badge.text}
+      </span>
     </div>
   );
 }
 
-function PhaseHeader({
-  index,
-  title,
-  subtitle,
+// ---------------------------------------------------------------------------
+// CitedText — renders answer text with [CITE:id] as clickable superscripts
+// ---------------------------------------------------------------------------
+
+const _CITE_RE = /\[CITE:([^\]]+)\]/g;
+
+function CitedText({
+  text,
+  citations,
+  sourceFileName,
 }: {
-  index: string;
-  title: string;
-  subtitle: string;
+  text: string;
+  citations?: Record<string, CitationInfo>;
+  sourceFileName?: string | null;
 }) {
+  // Build ordered list of unique citation IDs as they appear in the text
+  const citeOrder: string[] = [];
+  const seen = new Set<string>();
+  for (const m of text.matchAll(_CITE_RE)) {
+    if (!seen.has(m[1])) { seen.add(m[1]); citeOrder.push(m[1]); }
+  }
+
+  // Render the Sources section as links too (lines starting with "- [")
+  const renderLine = (line: string, lineIdx: number) => {
+    // Markdown link: [label](url)
+    const mdLink = /\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g;
+    const linkParts: React.ReactNode[] = [];
+    let pos = 0;
+    for (const m of line.matchAll(new RegExp(mdLink.source, "g"))) {
+      if (m.index! > pos) linkParts.push(line.slice(pos, m.index));
+      linkParts.push(
+        <a key={m.index} href={m[2]} target="_blank" rel="noopener noreferrer"
+           className="text-[var(--accent)] underline underline-offset-2 hover:opacity-80 break-all">
+          {m[1]}
+        </a>
+      );
+      pos = m.index! + m[0].length;
+    }
+    if (pos < line.length) linkParts.push(line.slice(pos));
+    return <span key={lineIdx}>{linkParts}</span>;
+  };
+
+  // Split answer into lines to handle Sources section markdown
+  const lines = text.split("\n");
+  const lineNodes = lines.map((rawLine, li) => {
+    const isBold = rawLine.startsWith("**") || rawLine.startsWith("## ");
+    const isListItem = rawLine.startsWith("- ") || rawLine.startsWith("* ");
+    // Process [CITE:] within a line
+    const lineSegments: React.ReactNode[] = [];
+    let lpos = 0;
+    for (const m of rawLine.matchAll(new RegExp(_CITE_RE.source, "g"))) {
+      if (m.index! > lpos) lineSegments.push(renderLine(rawLine.slice(lpos, m.index!), lpos));
+      const n = citeOrder.indexOf(m[1]) + 1;
+      const info = citations?.[m[1]];
+      const href = info?.document_url;
+      lineSegments.push(
+        href ? (
+          <a key={m.index} href={href} target="_blank" rel="noopener noreferrer"
+             title={info.summary || m[1]}
+             className="ml-0.5 align-super text-[9px] font-mono text-[var(--accent)] hover:underline">
+            [{n}]
+          </a>
+        ) : (
+          <sup key={m.index} title={info?.summary || m[1]}
+               className="ml-0.5 text-[9px] font-mono text-[var(--accent)]/70">
+            [{n}]
+          </sup>
+        )
+      );
+      lpos = m.index! + m[0].length;
+    }
+    if (lpos < rawLine.length) lineSegments.push(renderLine(rawLine.slice(lpos), lpos));
+
+    const inner = lineSegments.length > 0 ? lineSegments : renderLine(rawLine, li);
+
+    if (isBold) return <p key={li} className="font-semibold text-foreground mt-2">{inner}</p>;
+    if (isListItem) return <li key={li} className="ml-4 list-disc text-muted-foreground">{inner}</li>;
+    return rawLine.trim() === ""
+      ? <div key={li} className="h-2" />
+      : <p key={li} className="text-sm leading-relaxed text-foreground">{inner}</p>;
+  });
+
+  // Footnote list at bottom
+  const footnotes = citeOrder
+    .map((id, idx) => {
+      const info = citations?.[id];
+      if (!info) return null;
+      const href = info.document_url;
+      const page = info.page != null && String(info.page).trim() !== "" ? String(info.page) : null;
+      const isTarget = info.role === "target";
+      // For target citations without a URL, fall back to the uploaded filing.
+      const showFileFallback = !href && isTarget && !!sourceFileName;
+
+      return (
+        <div key={id} className="flex gap-2 text-[10px] font-mono text-muted-foreground">
+          <span className="shrink-0 text-[var(--accent)]">[{idx + 1}]</span>
+          <span className="min-w-0">
+            <span className="text-foreground">{info.company}</span>
+            {" · "}
+            <span className={isTarget ? "text-[var(--accent)]" : "text-[var(--warning)]"}>
+              {info.role}
+            </span>
+            {" · "}
+            {info.summary.slice(0, 80)}
+            {showFileFallback ? (
+              <>
+                {" · "}
+                <span className="text-foreground">Source: {sourceFileName}</span>
+                {page && <span className="text-muted-foreground"> · p. {page}</span>}
+              </>
+            ) : href ? (
+              <>
+                {" "}
+                <a href={href} target="_blank" rel="noopener noreferrer"
+                   className="text-[var(--accent)] underline underline-offset-2 hover:opacity-80">
+                  source ↗
+                </a>
+                {page && <span className="text-muted-foreground"> · p. {page}</span>}
+              </>
+            ) : (
+              page && <span className="text-muted-foreground"> · p. {page}</span>
+            )}
+          </span>
+        </div>
+      );
+    })
+    .filter(Boolean);
+
   return (
-    <div className="mb-6 flex items-start gap-4">
-      <span className="mt-1 font-mono text-xs text-muted-foreground/70">{index}</span>
-      <div className="max-w-2xl">
-        <h2 className="text-xl font-semibold tracking-tight text-foreground">{title}</h2>
-        <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{subtitle}</p>
-      </div>
+    <div className="space-y-0.5">
+      <div className="space-y-1">{lineNodes}</div>
+      {footnotes.length > 0 && (
+        <div className="mt-4 pt-3 border-t border-border space-y-1.5">
+          <span className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground">
+            Citations
+          </span>
+          {footnotes}
+        </div>
+      )}
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// ReasoningTrace — Claude-style muted "thought" block shown UNDER the answer
+// ---------------------------------------------------------------------------
+
+function ReasoningTrace({ trace }: { trace: string }) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="mt-4 rounded-lg border border-border/60 bg-[var(--panel)]/60 overflow-hidden">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center justify-between px-3 py-2 text-left hover:bg-muted/40 transition-colors"
+      >
+        <span className="flex items-center gap-2 text-[11px] italic text-muted-foreground">
+          <Sparkles className="h-3 w-3 opacity-60" />
+          Reasoning
+        </span>
+        <ChevronDown
+          className={`h-3.5 w-3.5 text-muted-foreground/70 transition-transform ${
+            open ? "rotate-180" : ""
+          }`}
+        />
+      </button>
+      {open && (
+        <div className="px-4 pb-3 pt-1 border-t border-border/40">
+          <pre className="whitespace-pre-wrap text-[12px] font-sans text-muted-foreground/80 leading-relaxed max-h-96 overflow-y-auto italic">
+            {trace}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MessageBubble
+// ---------------------------------------------------------------------------
 
 function MessageBubble({
   message,
   onEvaluate,
+  sourceFileName,
 }: {
   message: ChatMessage;
-  onEvaluate: () => void;
+  onEvaluate: (testType: string) => void;
+  sourceFileName?: string | null;
 }) {
   const [traceOpen, setTraceOpen] = useState(false);
+  const [selectedEval, setSelectedEval] = useState("overall_score");
 
   if (message.role === "user") {
     return (
-      <div
-        className="flex justify-end p-5"
-        style={{ animation: "fadeReveal 0.4s var(--ease-out-expo) both" }}
-      >
-        <div className="max-w-[80%] rounded-2xl rounded-tr-sm border border-border bg-elevated px-4 py-2.5 text-sm font-medium text-foreground">
+      <div className="p-5 flex justify-end" style={{ animation: "fadeReveal 0.4s var(--ease-out-expo) both" }}>
+        <div className="max-w-[80%] rounded-2xl rounded-tr-sm bg-[var(--elevated)] text-[var(--accent)] px-4 py-2.5 text-sm font-medium shadow-[var(--shadow-soft)]">
           {message.content}
         </div>
       </div>
@@ -705,25 +1025,42 @@ function MessageBubble({
   const isThinking = !message.content;
   const traceDone = message.trace?.every((t) => t.status === "done");
 
+  // Auto-run an overall score once the answer is ready, so the user always
+  // sees a score under the answer. They can still switch tests afterwards.
+  const autoEvalFiredRef = useRef(false);
+  useEffect(() => {
+    if (
+      !isThinking &&
+      traceDone &&
+      !message.evaluation &&
+      !message.evaluating &&
+      !autoEvalFiredRef.current
+    ) {
+      autoEvalFiredRef.current = true;
+      onEvaluate("overall_score");
+    }
+  }, [isThinking, traceDone, message.evaluation, message.evaluating, onEvaluate]);
+
   return (
     <div className="p-5" style={{ animation: "fadeReveal 0.4s var(--ease-out-expo) both" }}>
       <div className="flex gap-3">
-        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent/15 text-accent ring-1 ring-accent/25">
+        <div className="h-7 w-7 shrink-0 rounded-full bg-[var(--accent)] flex items-center justify-center text-white shadow-[var(--shadow-soft)]">
           <Sparkles className="h-3.5 w-3.5" />
         </div>
-        <div className="min-w-0 flex-1">
+        <div className="flex-1 min-w-0">
+          {/* Process trace */}
           {message.trace && (
-            <div className="mb-3 overflow-hidden rounded-lg border border-border bg-panel">
+            <div className="mb-3 rounded-lg border border-border bg-[var(--panel)] overflow-hidden">
               <button
                 onClick={() => setTraceOpen((o) => !o)}
-                className="flex w-full items-center justify-between px-3 py-2 text-left"
+                className="w-full flex items-center justify-between px-3 py-2 text-left"
               >
-                <span className="text-xs font-medium text-foreground">
-                  {isThinking ? "Reasoning" : "Process trace"}
+                <span className="font-mono text-[10px] uppercase tracking-widest text-foreground">
+                  {isThinking ? "Reasoning…" : "Process trace"}
                 </span>
                 <div className="flex items-center gap-2">
                   {isThinking && (
-                    <span className="text-[11px] text-accent">live</span>
+                    <span className="font-mono text-[10px] text-[var(--warning)] animate-pulse">live</span>
                   )}
                   <ChevronDown
                     className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${
@@ -733,7 +1070,7 @@ function MessageBubble({
                 </div>
               </button>
               {(traceOpen || isThinking) && (
-                <div className="space-y-1.5 px-3 pb-3 text-xs">
+                <div className="px-3 pb-3 space-y-1.5 font-mono text-[10px]">
                   {message.trace.map((t) => (
                     <div key={t.step} className="flex items-center justify-between">
                       <span className="flex items-center gap-2 text-muted-foreground">
@@ -743,13 +1080,13 @@ function MessageBubble({
                       <span
                         className={
                           t.status === "done"
-                            ? "text-accent"
+                            ? "text-[var(--accent)]"
                             : t.status === "running"
-                            ? "text-foreground"
+                            ? "text-[var(--warning)]"
                             : "text-muted-foreground/60"
                         }
                       >
-                        {t.status}
+                        {t.status.toUpperCase()}
                       </span>
                     </div>
                   ))}
@@ -758,31 +1095,69 @@ function MessageBubble({
             </div>
           )}
 
+          {/* Answer */}
           {isThinking ? (
-            <div className="shimmer-bg h-4 w-2/3 rounded" />
+            <div className="h-4 w-2/3 rounded shimmer-bg" />
           ) : (
-            <p className="text-sm leading-relaxed text-foreground">{message.content}</p>
+            <CitedText
+              text={message.content}
+              citations={message.citations}
+              sourceFileName={sourceFileName}
+            />
           )}
 
+          {/* Reasoning trace (LLM chain-of-thought) — Claude-style muted block */}
+          {message.reasoning_trace && (
+            <ReasoningTrace trace={message.reasoning_trace} />
+          )}
+
+          {/* Evaluation panel — always visible after the answer, with test switcher */}
           {!isThinking && traceDone && (
-            <div className="mt-4">
-              {!message.evaluation && !message.evaluating && (
-                <button
-                  onClick={onEvaluate}
-                  className="inline-flex items-center gap-2 rounded-md border border-border bg-elevated px-3 py-1.5 text-xs font-medium text-foreground transition-all hover:bg-muted"
-                >
-                  <ShieldCheck className="h-3.5 w-3.5 text-accent" />
-                  Audit this answer
-                  <span className="text-[10px] text-muted-foreground">optional</span>
-                </button>
-              )}
+            <div className="mt-5 rounded-xl border border-border bg-[var(--panel)]/50 overflow-hidden">
+              <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-border/60">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="h-3.5 w-3.5 text-[var(--accent)]" />
+                  <span className="font-mono text-[10px] uppercase tracking-widest text-foreground">
+                    Fidelity Audit
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={selectedEval}
+                    onChange={(e) => setSelectedEval(e.target.value)}
+                    disabled={message.evaluating}
+                    className="rounded-md border border-input bg-background px-2 py-1 text-[11px] font-mono outline-none focus:ring-1 focus:ring-ring text-foreground disabled:opacity-50"
+                  >
+                    {EVAL_TESTS.map((t) => (
+                      <option key={t.value} value={t.value}>{t.label}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => onEvaluate(selectedEval)}
+                    disabled={message.evaluating}
+                    className="inline-flex items-center gap-1.5 rounded-md bg-[var(--accent)] text-white px-3 py-1 text-[11px] font-semibold hover:brightness-110 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-[var(--shadow-soft)]"
+                  >
+                    {message.evaluation && message.evalType === selectedEval ? "Re-run" : "Run"}
+                  </button>
+                </div>
+              </div>
+
               {message.evaluating && (
-                <div className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
-                  Auditing claims…
+                <div className="flex items-center gap-2 px-4 py-4 text-[11px] text-muted-foreground font-mono uppercase tracking-widest">
+                  <span className="h-1.5 w-1.5 rounded-full bg-[var(--warning)] animate-pulse" />
+                  Running {EVAL_TESTS.find((t) => t.value === message.evalType)?.label ?? "audit"}…
                 </div>
               )}
-              {message.evaluation && <Scorecard data={message.evaluation} />}
+
+              {!message.evaluating && !message.evaluation && (
+                <div className="px-4 py-4 text-[11px] text-muted-foreground italic">
+                  Pick a test above and run it to score this answer.
+                </div>
+              )}
+
+              {message.evaluation && !message.evaluating && (
+                <Scorecard data={message.evaluation} />
+              )}
             </div>
           )}
         </div>
@@ -792,11 +1167,12 @@ function MessageBubble({
 }
 
 function StatusDot({ status }: { status: string }) {
-  if (status === "done") return <span className="h-1.5 w-1.5 rounded-full bg-accent" />;
+  if (status === "done")
+    return <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />;
   if (status === "running")
     return (
       <span
-        className="h-1.5 w-1.5 rounded-full bg-foreground"
+        className="h-1.5 w-1.5 rounded-full bg-[var(--warning)]"
         style={{ animation: "pulseSlow 1.2s infinite" }}
       />
     );
@@ -804,19 +1180,24 @@ function StatusDot({ status }: { status: string }) {
 }
 
 function Scorecard({ data }: { data: EvaluationResult }) {
+  const label = EVAL_TESTS.find((t) => t.value === data.test_type)?.label ?? "Audit";
   return (
     <div
-      className="mt-2 overflow-hidden rounded-xl border border-border bg-panel"
+      className="mt-2 overflow-hidden rounded-xl border border-border bg-card"
       style={{ animation: "fadeReveal 0.5s var(--ease-out-expo) both" }}
     >
-      <div className="flex items-center justify-between border-b border-border bg-elevated px-4 py-3">
+      <div className="flex items-center justify-between px-4 py-3 bg-[var(--panel)] border-b border-border">
         <div className="flex items-center gap-2">
-          <ShieldCheck className="h-3.5 w-3.5 text-accent" />
-          <span className="text-xs font-medium text-foreground">Fidelity audit</span>
+          <ShieldCheck className="h-3.5 w-3.5 text-[var(--accent)]" />
+          <span className="font-mono text-[10px] uppercase tracking-widest text-foreground">
+            {label}
+          </span>
         </div>
         <div className="flex items-baseline gap-1.5">
-          <span className="text-[11px] text-muted-foreground">Weighted</span>
-          <span className="text-2xl font-semibold tabular-nums text-accent">
+          <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+            Score
+          </span>
+          <span className="font-sans text-2xl text-[var(--accent)]">
             {(data.weighted * 100).toFixed(0)}
           </span>
           <span className="text-xs text-muted-foreground">/100</span>
@@ -824,21 +1205,21 @@ function Scorecard({ data }: { data: EvaluationResult }) {
       </div>
       <table className="w-full text-left">
         <tbody className="divide-y divide-border text-sm">
-          {data.rows.map((r) => (
-            <tr key={r.dimension}>
-              <td className="w-1/3 px-4 py-2.5 font-medium text-foreground">
+          {data.rows.map((r, i) => (
+            <tr key={i}>
+              <td className="px-4 py-2.5 font-medium text-foreground w-1/3 truncate max-w-[160px]" title={r.dimension}>
                 {r.dimension}
               </td>
               <td className="px-4 py-2.5 text-xs text-muted-foreground">{r.note}</td>
-              <td className="w-32 px-4 py-2.5">
+              <td className="px-4 py-2.5 w-32">
                 <div className="flex items-center gap-2">
-                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                  <div className="h-1.5 flex-1 rounded-full bg-muted overflow-hidden">
                     <div
-                      className="h-full rounded-full bg-accent"
+                      className="h-full rounded-full bg-[var(--accent)]"
                       style={{ width: `${r.score * 100}%` }}
                     />
                   </div>
-                  <span className="w-8 text-right font-mono text-[11px] text-foreground">
+                  <span className="font-mono text-[10px] text-foreground w-8 text-right">
                     {(r.score * 100).toFixed(0)}
                   </span>
                 </div>

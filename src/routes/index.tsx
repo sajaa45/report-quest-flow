@@ -33,6 +33,7 @@ interface CitationInfo {
   role: "target" | "peer";
   document_url: string | null;
   summary: string;
+  page?: number | string | null;
 }
 
 interface ChatMessage {

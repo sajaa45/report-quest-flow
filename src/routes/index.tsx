@@ -282,10 +282,10 @@ function Index() {
     setSteps((prev) =>
       prev.map((s) => ({
         ...s,
-        status:     s.id < startFromStep ? s.status     : ("pending" as StepStatus),
-        logs:       s.id < startFromStep ? s.logs       : [],
-        summary:    s.id < startFromStep ? s.summary    : undefined,
-        durationMs: s.id < startFromStep ? s.durationMs : undefined,
+        status:     Number(s.id) < startFromStep ? s.status     : ("pending" as StepStatus),
+        logs:       Number(s.id) < startFromStep ? s.logs       : [],
+        summary:    Number(s.id) < startFromStep ? s.summary    : undefined,
+        durationMs: Number(s.id) < startFromStep ? s.durationMs : undefined,
       })),
     );
     stepStartRef.current = {};

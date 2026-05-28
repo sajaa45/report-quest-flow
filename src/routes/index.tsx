@@ -1025,6 +1025,22 @@ function MessageBubble({
   const isThinking = !message.content;
   const traceDone = message.trace?.every((t) => t.status === "done");
 
+  // Auto-run an overall score once the answer is ready, so the user always
+  // sees a score under the answer. They can still switch tests afterwards.
+  const autoEvalFiredRef = useRef(false);
+  useEffect(() => {
+    if (
+      !isThinking &&
+      traceDone &&
+      !message.evaluation &&
+      !message.evaluating &&
+      !autoEvalFiredRef.current
+    ) {
+      autoEvalFiredRef.current = true;
+      onEvaluate("overall_score");
+    }
+  }, [isThinking, traceDone, message.evaluation, message.evaluating, onEvaluate]);
+
   return (
     <div className="p-5" style={{ animation: "fadeReveal 0.4s var(--ease-out-expo) both" }}>
       <div className="flex gap-3">

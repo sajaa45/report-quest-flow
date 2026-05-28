@@ -908,25 +908,39 @@ function CitedText({
       const info = citations?.[id];
       if (!info) return null;
       const href = info.document_url;
+      const page = info.page != null && String(info.page).trim() !== "" ? String(info.page) : null;
+      const isTarget = info.role === "target";
+      // For target citations without a URL, fall back to the uploaded filing.
+      const showFileFallback = !href && isTarget && !!sourceFileName;
+
       return (
         <div key={id} className="flex gap-2 text-[10px] font-mono text-muted-foreground">
           <span className="shrink-0 text-[var(--accent)]">[{idx + 1}]</span>
-          <span className="truncate">
+          <span className="min-w-0">
             <span className="text-foreground">{info.company}</span>
             {" · "}
-            <span className={info.role === "target" ? "text-[var(--accent)]" : "text-[var(--warning)]"}>
+            <span className={isTarget ? "text-[var(--accent)]" : "text-[var(--warning)]"}>
               {info.role}
             </span>
             {" · "}
             {info.summary.slice(0, 80)}
-            {href && (
+            {showFileFallback ? (
+              <>
+                {" · "}
+                <span className="text-foreground">Source: {sourceFileName}</span>
+                {page && <span className="text-muted-foreground"> · p. {page}</span>}
+              </>
+            ) : href ? (
               <>
                 {" "}
                 <a href={href} target="_blank" rel="noopener noreferrer"
                    className="text-[var(--accent)] underline underline-offset-2 hover:opacity-80">
                   source ↗
                 </a>
+                {page && <span className="text-muted-foreground"> · p. {page}</span>}
               </>
+            ) : (
+              page && <span className="text-muted-foreground"> · p. {page}</span>
             )}
           </span>
         </div>

@@ -737,7 +737,12 @@ function Index() {
                   </div>
                 )}
                 {messages.map((m) => (
-                  <MessageBubble key={m.id} message={m} onEvaluate={(testType) => runEvaluation(m.id, testType)} />
+                  <MessageBubble
+                    key={m.id}
+                    message={m}
+                    onEvaluate={(testType) => runEvaluation(m.id, testType)}
+                    sourceFileName={file?.name ?? previousFilename ?? null}
+                  />
                 ))}
               </div>
 

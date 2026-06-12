@@ -12,7 +12,11 @@ import {
   Sparkles,
   Building2,
   ChevronDown,
+  Moon,
+  Palette,
+  Sun,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { StepItem, type StepData, type StepStatus } from "@/components/StepItem";
 import {
   PIPELINE_STEPS,
@@ -54,6 +58,22 @@ interface EvaluationResult {
   weighted: number;
 }
 
+interface CompanyOption {
+  name: string;
+  cik?: string | null;
+}
+
+type ColorMode = "dark" | "light";
+type PaletteName = "verdant" | "sage" | "sky" | "rose" | "lavender";
+
+const PALETTES: { value: PaletteName; label: string; previewClass: string }[] = [
+  { value: "verdant", label: "Verdant", previewClass: "bg-palette-verdant" },
+  { value: "sage", label: "Sage", previewClass: "bg-palette-sage" },
+  { value: "sky", label: "Sky", previewClass: "bg-palette-sky" },
+  { value: "rose", label: "Rose", previewClass: "bg-palette-rose" },
+  { value: "lavender", label: "Lavender", previewClass: "bg-palette-lavender" },
+];
+
 const EVAL_TESTS: { value: string; label: string }[] = [
   { value: "answer_relevancy",           label: "Answer Relevancy" },
   { value: "context_precision",          label: "Context Precision" },
@@ -82,10 +102,29 @@ function Index() {
   const [backendUrl, setBackendUrlState] = useState(DEFAULT_BACKEND_URL);
   const [showSettings, setShowSettings] = useState(false);
   const [connected, setConnected] = useState<boolean | null>(null);
+  const [colorMode, setColorMode] = useState<ColorMode>("dark");
+  const [palette, setPalette] = useState<PaletteName>("verdant");
+  const [companies, setCompanies] = useState<CompanyOption[]>([]);
+  const [selectedCompany, setSelectedCompany] = useState("");
+  const [companiesLoading, setCompaniesLoading] = useState(false);
 
   useEffect(() => {
     setBackendUrlState(getBackendUrl());
+    const savedMode = localStorage.getItem("verdant_color_mode");
+    const savedPalette = localStorage.getItem("verdant_palette");
+    if (savedMode === "light" || savedMode === "dark") setColorMode(savedMode);
+    if (PALETTES.some((item) => item.value === savedPalette)) {
+      setPalette(savedPalette as PaletteName);
+    }
   }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.mode = colorMode;
+    document.documentElement.dataset.palette = palette;
+    document.documentElement.classList.toggle("dark", colorMode === "dark");
+    localStorage.setItem("verdant_color_mode", colorMode);
+    localStorage.setItem("verdant_palette", palette);
+  }, [colorMode, palette]);
 
   useEffect(() => {
     let cancelled = false;
@@ -99,6 +138,29 @@ function Index() {
     })();
     return () => { cancelled = true; };
   }, [backendUrl]);
+
+  const loadCompanies = useCallback(async () => {
+    setCompaniesLoading(true);
+    try {
+      const response = await fetch(`${backendUrl}/companies`);
+      if (!response.ok) throw new Error(`Companies request failed (${response.status})`);
+      const data = (await response.json()) as { companies?: CompanyOption[] };
+      const options = data.companies ?? [];
+      setCompanies(options);
+      setSelectedCompany((current) =>
+        options.some((company) => company.name === current) ? current : options[0]?.name ?? "",
+      );
+    } catch {
+      setCompanies([]);
+      setSelectedCompany("");
+    } finally {
+      setCompaniesLoading(false);
+    }
+  }, [backendUrl]);
+
+  useEffect(() => {
+    void loadCompanies();
+  }, [loadCompanies]);
 
   // On startup, ask the backend if Neo4j already has data.
   // This unlocks QA even when the pipeline was run outside the UI (e.g. via CLI).
@@ -138,7 +200,10 @@ function Index() {
   const [steps, setSteps] = useState<StepData[]>(() => {
     try {
       const saved = localStorage.getItem("verdant_steps");
-      if (saved) return JSON.parse(saved) as StepData[];
+      if (saved) {
+        const parsed = JSON.parse(saved) as StepData[];
+        if (parsed.length === PIPELINE_STEPS.length) return parsed;
+      }
     } catch { /* ignore */ }
     return PIPELINE_STEPS.map((s) => ({
       id: s.id,
@@ -269,12 +334,9 @@ function Index() {
   }, [file, fiscalYear, backendUrl, resetSteps, startListening]);
 
   const resumePipeline = useCallback(async () => {
-    // Find the first step that isn't done — that's where we resume from.
     const firstIncompleteIdx = steps.findIndex((s) => s.status !== "done");
-    const startFromStep = firstIncompleteIdx + 1; // convert 0-indexed → 1-indexed step ID
-
-    // Resume is only possible from step 3+ (steps 1-2 require the original file).
-    if (!savedJobId || firstIncompleteIdx <= 0 || startFromStep < 3) {
+    const startFromStep = firstIncompleteIdx + 1;
+    if (!savedJobId || firstIncompleteIdx < 0) {
       runPipeline();
       return;
     }
@@ -294,26 +356,17 @@ function Index() {
     setPhase1Status("running");
 
     try {
-      const r = await fetch(`${backendUrl}/pipeline/resume`, {
+      const r = await fetch(`${backendUrl}/pipeline/${savedJobId}/run`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prev_job_id:     savedJobId,
-          start_from_step: startFromStep,
-          fiscal_year:     fiscalYear,
-        }),
       });
       if (!r.ok) throw new Error(`Resume failed (${r.status}): ${await r.text()}`);
-      const { job_id } = (await r.json()) as { job_id: string };
-      try { localStorage.setItem("verdant_job_id", job_id); } catch { /* ignore */ }
-      setSavedJobId(job_id);
-      startListening(job_id, file);
+      startListening(savedJobId, file);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Unknown error";
       setPhase1Error(msg);
       setPhase1Status("failed");
     }
-  }, [steps, savedJobId, fiscalYear, backendUrl, file, runPipeline, startListening]);
+  }, [steps, savedJobId, backendUrl, file, runPipeline, startListening]);
 
   useEffect(() => {
     return () => {
@@ -324,9 +377,10 @@ function Index() {
   // Smooth scroll to QA when Phase 1 completes
   useEffect(() => {
     if (phase1Status === "complete") {
+      void loadCompanies();
       setTimeout(() => phase2Ref.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 400);
     }
-  }, [phase1Status]);
+  }, [phase1Status, loadCompanies]);
 
   // -------- QA submit --------
   const askQuestion = useCallback(async () => {
@@ -371,7 +425,7 @@ function Index() {
       const r = await fetch(`${backendUrl}/qa/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: q }),
+        body: JSON.stringify({ question: q, reasoning: true, target_company: selectedCompany || null }),
       });
       if (r.ok) {
         const data = await r.json();
@@ -400,7 +454,7 @@ function Index() {
       ),
     );
     setAsking(false);
-  }, [question, asking, backendUrl]);
+  }, [question, asking, backendUrl, selectedCompany]);
 
   // -------- Evaluation (per-message, user-chosen test type) --------
   const runEvaluation = useCallback(
@@ -453,15 +507,12 @@ function Index() {
 
   const phase1Done = phase1Status === "complete";
 
-  // Resume is available when the pipeline failed partway through and we have
-  // a saved job_id with at least one completed step at step 3 or later.
   const firstIncompleteIdx = steps.findIndex((s) => s.status !== "done");
-  const resumeFromStep     = firstIncompleteIdx + 1; // 1-indexed
+  const resumeFromStep = firstIncompleteIdx + 1;
   const canResume =
     phase1Status === "failed" &&
     !!savedJobId &&
-    steps.some((s) => s.status === "done") &&
-    resumeFromStep >= 3;
+    resumeFromStep > 0;
 
   return (
     <div className="min-h-screen font-sans text-foreground selection:bg-[color-mix(in_oklab,var(--accent)_25%,transparent)]">
@@ -474,7 +525,7 @@ function Index() {
             </div>
             <div className="flex flex-col leading-tight">
               <span className="font-sans text-lg italic tracking-tight text-foreground">
-                Verdant
+                Performance Analysis
               </span>
               <span className="font-mono text-[9px] uppercase tracking-[0.18em] text-muted-foreground">
                 KYC Intelligence
@@ -496,29 +547,39 @@ function Index() {
                 {connected === null ? "Checking" : connected ? "Engine online" : "Engine offline"}
               </span>
             </div>
-            <button
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setColorMode((mode) => mode === "dark" ? "light" : "dark")}
+              aria-label={`Switch to ${colorMode === "dark" ? "light" : "dark"} mode`}
+            >
+              {colorMode === "dark" ? <Sun /> : <Moon />}
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={() => setShowSettings((s) => !s)}
-              className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               aria-label="Settings"
             >
               <Settings className="h-4 w-4" />
-            </button>
+            </Button>
           </div>
         </div>
         {showSettings && (
           <div className="border-t border-border bg-card">
-            <div className="mx-auto max-w-5xl px-6 py-3 flex items-center gap-3">
-              <label className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-                Backend URL
-              </label>
-              <input
-                type="text"
-                value={backendUrl}
-                onChange={(e) => setBackendUrlState(e.target.value)}
-                onBlur={(e) => setBackendUrl(e.target.value)}
-                placeholder="http://localhost:8000"
-                className="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-mono outline-none focus:ring-2 focus:ring-ring"
-              />
+            <div className="mx-auto grid max-w-5xl gap-4 px-6 py-4 md:grid-cols-[1fr_auto]">
+              <div className="flex items-center gap-3">
+                <label className="text-xs font-medium text-muted-foreground">Backend URL</label>
+                <input type="text" value={backendUrl} onChange={(e) => setBackendUrlState(e.target.value)} onBlur={(e) => setBackendUrl(e.target.value)} placeholder="http://localhost:8000" className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-xs font-mono outline-none focus:ring-2 focus:ring-ring" />
+              </div>
+              <div className="flex items-center gap-2" aria-label="Color palette">
+                <Palette className="h-4 w-4 text-muted-foreground" />
+                {PALETTES.map((item) => (
+                  <Button key={item.value} variant="ghost" size="icon" onClick={() => setPalette(item.value)} aria-label={`${item.label} palette`} title={item.label} className={`h-8 w-8 rounded-full ${palette === item.value ? "ring-2 ring-ring ring-offset-2 ring-offset-background" : ""}`}>
+                    <span className={`h-4 w-4 rounded-full ${item.previewClass}`} />
+                  </Button>
+                ))}
+              </div>
             </div>
           </div>
         )}
@@ -537,7 +598,7 @@ function Index() {
             Know who you're <em className="text-[var(--accent)]">really</em> dealing with.
           </h1>
           <p className="mt-5 text-base text-muted-foreground max-w-xl leading-relaxed">
-            Upload a counterparty filing and Verdant maps its financial profile, peers, and risk surface into a queryable knowledge graph — with every answer auditable down to its source.
+            Turn complex financial reports into a searchable knowledge base. Ask questions in plain language and uncover insights, trends, and risks with source-backed answers.
           </p>
         </header>
 
@@ -546,7 +607,7 @@ function Index() {
           <PhaseHeader
             kicker="01 — Ingestion"
             title="Counterparty Filing"
-            subtitle="Drop a 10-K, annual report, or registration document. Verdant parses it into structured entities and a graph."
+            subtitle="Drop a 10-K, annual report, or registration document. The system organizes its key financial information, entities, and relationships into an interactive knowledge base."
             badge={phase1Badge}
           />
 
@@ -725,6 +786,27 @@ function Index() {
               }}
             />
 
+            <div className="mb-4 flex flex-col gap-3 rounded-xl border border-border bg-card p-4 shadow-[var(--shadow-soft)] sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-semibold text-foreground">Company in focus</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">Answers and comparisons will be scoped to this target company.</p>
+              </div>
+              <div className="flex items-center gap-2 sm:min-w-72">
+                <Building2 className="h-4 w-4 shrink-0 text-[var(--accent)]" />
+                <select
+                  value={selectedCompany}
+                  onChange={(event) => setSelectedCompany(event.target.value)}
+                  disabled={companiesLoading || companies.length === 0}
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground outline-none transition-shadow focus:ring-2 focus:ring-ring disabled:opacity-60"
+                  aria-label="Target company"
+                >
+                  {companiesLoading && <option>Loading companies…</option>}
+                  {!companiesLoading && companies.length === 0 && <option value="">All available companies</option>}
+                  {companies.map((company) => <option key={`${company.name}-${company.cik ?? ""}`} value={company.name}>{company.name}</option>)}
+                </select>
+              </div>
+            </div>
+
             <div className="rounded-2xl border border-border bg-card shadow-[var(--shadow-soft)] overflow-hidden">
               {/* Messages */}
               <div className="divide-y divide-border max-h-[520px] overflow-y-auto">
@@ -779,7 +861,7 @@ function Index() {
           <div className="flex items-center gap-2 text-muted-foreground">
             <ShieldCheck className="h-3.5 w-3.5 text-[var(--accent)]" />
             <span className="text-[10px] font-mono uppercase tracking-widest">
-              Verdant · KYC Engine · Auditable by design
+              KYC Engine · Auditable by design
             </span>
           </div>
           <div className="text-[10px] text-muted-foreground font-mono">

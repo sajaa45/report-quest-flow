@@ -66,12 +66,12 @@ interface CompanyOption {
 type ColorMode = "dark" | "light";
 type PaletteName = "verdant" | "sage" | "sky" | "rose" | "lavender";
 
-const PALETTES: { value: PaletteName; label: string; color: string }[] = [
-  { value: "verdant", label: "Verdant", color: "oklch(0.72 0.11 165)" },
-  { value: "sage", label: "Sage", color: "oklch(0.76 0.075 140)" },
-  { value: "sky", label: "Sky", color: "oklch(0.76 0.085 225)" },
-  { value: "rose", label: "Rose", color: "oklch(0.76 0.095 18)" },
-  { value: "lavender", label: "Lavender", color: "oklch(0.76 0.095 305)" },
+const PALETTES: { value: PaletteName; label: string; previewClass: string }[] = [
+  { value: "verdant", label: "Verdant", previewClass: "bg-palette-verdant" },
+  { value: "sage", label: "Sage", previewClass: "bg-palette-sage" },
+  { value: "sky", label: "Sky", previewClass: "bg-palette-sky" },
+  { value: "rose", label: "Rose", previewClass: "bg-palette-rose" },
+  { value: "lavender", label: "Lavender", previewClass: "bg-palette-lavender" },
 ];
 
 const EVAL_TESTS: { value: string; label: string }[] = [
@@ -576,7 +576,7 @@ function Index() {
                 <Palette className="h-4 w-4 text-muted-foreground" />
                 {PALETTES.map((item) => (
                   <Button key={item.value} variant="ghost" size="icon" onClick={() => setPalette(item.value)} aria-label={`${item.label} palette`} title={item.label} className={`h-8 w-8 rounded-full ${palette === item.value ? "ring-2 ring-ring ring-offset-2 ring-offset-background" : ""}`}>
-                    <span className="h-4 w-4 rounded-full" style={{ backgroundColor: item.color }} />
+                    <span className={`h-4 w-4 rounded-full ${item.previewClass}`} />
                   </Button>
                 ))}
               </div>

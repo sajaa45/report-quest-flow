@@ -522,7 +522,7 @@ function Index() {
             </div>
             <div className="flex flex-col leading-tight">
               <span className="font-sans text-lg italic tracking-tight text-foreground">
-                Verdant
+                Performance Analysis
               </span>
               <span className="font-mono text-[9px] uppercase tracking-[0.18em] text-muted-foreground">
                 KYC Intelligence
@@ -544,29 +544,39 @@ function Index() {
                 {connected === null ? "Checking" : connected ? "Engine online" : "Engine offline"}
               </span>
             </div>
-            <button
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setColorMode((mode) => mode === "dark" ? "light" : "dark")}
+              aria-label={`Switch to ${colorMode === "dark" ? "light" : "dark"} mode`}
+            >
+              {colorMode === "dark" ? <Sun /> : <Moon />}
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={() => setShowSettings((s) => !s)}
-              className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               aria-label="Settings"
             >
               <Settings className="h-4 w-4" />
-            </button>
+            </Button>
           </div>
         </div>
         {showSettings && (
           <div className="border-t border-border bg-card">
-            <div className="mx-auto max-w-5xl px-6 py-3 flex items-center gap-3">
-              <label className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-                Backend URL
-              </label>
-              <input
-                type="text"
-                value={backendUrl}
-                onChange={(e) => setBackendUrlState(e.target.value)}
-                onBlur={(e) => setBackendUrl(e.target.value)}
-                placeholder="http://localhost:8000"
-                className="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-mono outline-none focus:ring-2 focus:ring-ring"
-              />
+            <div className="mx-auto grid max-w-5xl gap-4 px-6 py-4 md:grid-cols-[1fr_auto]">
+              <div className="flex items-center gap-3">
+                <label className="text-xs font-medium text-muted-foreground">Backend URL</label>
+                <input type="text" value={backendUrl} onChange={(e) => setBackendUrlState(e.target.value)} onBlur={(e) => setBackendUrl(e.target.value)} placeholder="http://localhost:8000" className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-xs font-mono outline-none focus:ring-2 focus:ring-ring" />
+              </div>
+              <div className="flex items-center gap-2" aria-label="Color palette">
+                <Palette className="h-4 w-4 text-muted-foreground" />
+                {PALETTES.map((item) => (
+                  <Button key={item.value} variant="ghost" size="icon" onClick={() => setPalette(item.value)} aria-label={`${item.label} palette`} title={item.label} className={`h-8 w-8 rounded-full ${palette === item.value ? "ring-2 ring-ring ring-offset-2 ring-offset-background" : ""}`}>
+                    <span className="h-4 w-4 rounded-full" style={{ backgroundColor: item.color }} />
+                  </Button>
+                ))}
+              </div>
             </div>
           </div>
         )}
@@ -585,7 +595,7 @@ function Index() {
             Know who you're <em className="text-[var(--accent)]">really</em> dealing with.
           </h1>
           <p className="mt-5 text-base text-muted-foreground max-w-xl leading-relaxed">
-            Upload a counterparty filing and Verdant maps its financial profile, peers, and risk surface into a queryable knowledge graph — with every answer auditable down to its source.
+            Turn complex financial reports into a searchable knowledge base. Ask questions in plain language and uncover insights, trends, and risks with source-backed answers.
           </p>
         </header>
 
@@ -594,7 +604,7 @@ function Index() {
           <PhaseHeader
             kicker="01 — Ingestion"
             title="Counterparty Filing"
-            subtitle="Drop a 10-K, annual report, or registration document. Verdant parses it into structured entities and a graph."
+            subtitle="Drop a 10-K, annual report, or registration document. The system organizes its key financial information, entities, and relationships into an interactive knowledge base."
             badge={phase1Badge}
           />
 

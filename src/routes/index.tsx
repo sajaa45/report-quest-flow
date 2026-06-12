@@ -102,10 +102,29 @@ function Index() {
   const [backendUrl, setBackendUrlState] = useState(DEFAULT_BACKEND_URL);
   const [showSettings, setShowSettings] = useState(false);
   const [connected, setConnected] = useState<boolean | null>(null);
+  const [colorMode, setColorMode] = useState<ColorMode>("dark");
+  const [palette, setPalette] = useState<PaletteName>("verdant");
+  const [companies, setCompanies] = useState<CompanyOption[]>([]);
+  const [selectedCompany, setSelectedCompany] = useState("");
+  const [companiesLoading, setCompaniesLoading] = useState(false);
 
   useEffect(() => {
     setBackendUrlState(getBackendUrl());
+    const savedMode = localStorage.getItem("verdant_color_mode");
+    const savedPalette = localStorage.getItem("verdant_palette");
+    if (savedMode === "light" || savedMode === "dark") setColorMode(savedMode);
+    if (PALETTES.some((item) => item.value === savedPalette)) {
+      setPalette(savedPalette as PaletteName);
+    }
   }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.mode = colorMode;
+    document.documentElement.dataset.palette = palette;
+    document.documentElement.classList.toggle("dark", colorMode === "dark");
+    localStorage.setItem("verdant_color_mode", colorMode);
+    localStorage.setItem("verdant_palette", palette);
+  }, [colorMode, palette]);
 
   useEffect(() => {
     let cancelled = false;
@@ -119,6 +138,29 @@ function Index() {
     })();
     return () => { cancelled = true; };
   }, [backendUrl]);
+
+  const loadCompanies = useCallback(async () => {
+    setCompaniesLoading(true);
+    try {
+      const response = await fetch(`${backendUrl}/companies`);
+      if (!response.ok) throw new Error(`Companies request failed (${response.status})`);
+      const data = (await response.json()) as { companies?: CompanyOption[] };
+      const options = data.companies ?? [];
+      setCompanies(options);
+      setSelectedCompany((current) =>
+        options.some((company) => company.name === current) ? current : options[0]?.name ?? "",
+      );
+    } catch {
+      setCompanies([]);
+      setSelectedCompany("");
+    } finally {
+      setCompaniesLoading(false);
+    }
+  }, [backendUrl]);
+
+  useEffect(() => {
+    void loadCompanies();
+  }, [loadCompanies, phase1Status]);
 
   // On startup, ask the backend if Neo4j already has data.
   // This unlocks QA even when the pipeline was run outside the UI (e.g. via CLI).
@@ -391,7 +433,7 @@ function Index() {
       const r = await fetch(`${backendUrl}/qa/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: q }),
+        body: JSON.stringify({ question: q, reasoning: true, target_company: selectedCompany || null }),
       });
       if (r.ok) {
         const data = await r.json();
@@ -420,7 +462,7 @@ function Index() {
       ),
     );
     setAsking(false);
-  }, [question, asking, backendUrl]);
+  }, [question, asking, backendUrl, selectedCompany]);
 
   // -------- Evaluation (per-message, user-chosen test type) --------
   const runEvaluation = useCallback(

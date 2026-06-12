@@ -200,7 +200,10 @@ function Index() {
   const [steps, setSteps] = useState<StepData[]>(() => {
     try {
       const saved = localStorage.getItem("verdant_steps");
-      if (saved) return JSON.parse(saved) as StepData[];
+      if (saved) {
+        const parsed = JSON.parse(saved) as StepData[];
+        if (parsed.length === PIPELINE_STEPS.length) return parsed;
+      }
     } catch { /* ignore */ }
     return PIPELINE_STEPS.map((s) => ({
       id: s.id,
@@ -783,6 +786,27 @@ function Index() {
               }}
             />
 
+            <div className="mb-4 flex flex-col gap-3 rounded-xl border border-border bg-card p-4 shadow-[var(--shadow-soft)] sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-semibold text-foreground">Company in focus</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">Answers and comparisons will be scoped to this target company.</p>
+              </div>
+              <div className="flex items-center gap-2 sm:min-w-72">
+                <Building2 className="h-4 w-4 shrink-0 text-[var(--accent)]" />
+                <select
+                  value={selectedCompany}
+                  onChange={(event) => setSelectedCompany(event.target.value)}
+                  disabled={companiesLoading || companies.length === 0}
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground outline-none transition-shadow focus:ring-2 focus:ring-ring disabled:opacity-60"
+                  aria-label="Target company"
+                >
+                  {companiesLoading && <option>Loading companies…</option>}
+                  {!companiesLoading && companies.length === 0 && <option value="">All available companies</option>}
+                  {companies.map((company) => <option key={`${company.name}-${company.cik ?? ""}`} value={company.name}>{company.name}</option>)}
+                </select>
+              </div>
+            </div>
+
             <div className="rounded-2xl border border-border bg-card shadow-[var(--shadow-soft)] overflow-hidden">
               {/* Messages */}
               <div className="divide-y divide-border max-h-[520px] overflow-y-auto">
@@ -837,7 +861,7 @@ function Index() {
           <div className="flex items-center gap-2 text-muted-foreground">
             <ShieldCheck className="h-3.5 w-3.5 text-[var(--accent)]" />
             <span className="text-[10px] font-mono uppercase tracking-widest">
-              Verdant · KYC Engine · Auditable by design
+              KYC Engine · Auditable by design
             </span>
           </div>
           <div className="text-[10px] text-muted-foreground font-mono">

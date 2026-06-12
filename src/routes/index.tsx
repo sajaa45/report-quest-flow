@@ -160,7 +160,7 @@ function Index() {
 
   useEffect(() => {
     void loadCompanies();
-  }, [loadCompanies, phase1Status]);
+  }, [loadCompanies]);
 
   // On startup, ask the backend if Neo4j already has data.
   // This unlocks QA even when the pipeline was run outside the UI (e.g. via CLI).
@@ -386,9 +386,10 @@ function Index() {
   // Smooth scroll to QA when Phase 1 completes
   useEffect(() => {
     if (phase1Status === "complete") {
+      void loadCompanies();
       setTimeout(() => phase2Ref.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 400);
     }
-  }, [phase1Status]);
+  }, [phase1Status, loadCompanies]);
 
   // -------- QA submit --------
   const askQuestion = useCallback(async () => {

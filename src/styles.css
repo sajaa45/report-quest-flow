@@ -30,6 +30,11 @@
   --color-elevated: var(--elevated);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
+  --color-palette-verdant: oklch(0.72 0.11 165);
+  --color-palette-sage: oklch(0.76 0.075 140);
+  --color-palette-sky: oklch(0.76 0.085 225);
+  --color-palette-rose: oklch(0.76 0.095 18);
+  --color-palette-lavender: oklch(0.76 0.095 305);
 
   --font-sans: "Manrope", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;

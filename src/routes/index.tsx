@@ -12,7 +12,11 @@ import {
   Sparkles,
   Building2,
   ChevronDown,
+  Moon,
+  Palette,
+  Sun,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { StepItem, type StepData, type StepStatus } from "@/components/StepItem";
 import {
   PIPELINE_STEPS,
@@ -53,6 +57,22 @@ interface EvaluationResult {
   rows: { dimension: string; score: number; note: string }[];
   weighted: number;
 }
+
+interface CompanyOption {
+  name: string;
+  cik?: string | null;
+}
+
+type ColorMode = "dark" | "light";
+type PaletteName = "verdant" | "sage" | "sky" | "rose" | "lavender";
+
+const PALETTES: { value: PaletteName; label: string; color: string }[] = [
+  { value: "verdant", label: "Verdant", color: "oklch(0.72 0.11 165)" },
+  { value: "sage", label: "Sage", color: "oklch(0.76 0.075 140)" },
+  { value: "sky", label: "Sky", color: "oklch(0.76 0.085 225)" },
+  { value: "rose", label: "Rose", color: "oklch(0.76 0.095 18)" },
+  { value: "lavender", label: "Lavender", color: "oklch(0.76 0.095 305)" },
+];
 
 const EVAL_TESTS: { value: string; label: string }[] = [
   { value: "answer_relevancy",           label: "Answer Relevancy" },

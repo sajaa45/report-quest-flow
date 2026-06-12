@@ -331,12 +331,9 @@ function Index() {
   }, [file, fiscalYear, backendUrl, resetSteps, startListening]);
 
   const resumePipeline = useCallback(async () => {
-    // Find the first step that isn't done — that's where we resume from.
     const firstIncompleteIdx = steps.findIndex((s) => s.status !== "done");
-    const startFromStep = firstIncompleteIdx + 1; // convert 0-indexed → 1-indexed step ID
-
-    // Resume is only possible from step 3+ (steps 1-2 require the original file).
-    if (!savedJobId || firstIncompleteIdx <= 0 || startFromStep < 3) {
+    const startFromStep = firstIncompleteIdx + 1;
+    if (!savedJobId || firstIncompleteIdx < 0) {
       runPipeline();
       return;
     }
@@ -356,26 +353,17 @@ function Index() {
     setPhase1Status("running");
 
     try {
-      const r = await fetch(`${backendUrl}/pipeline/resume`, {
+      const r = await fetch(`${backendUrl}/pipeline/${savedJobId}/run`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prev_job_id:     savedJobId,
-          start_from_step: startFromStep,
-          fiscal_year:     fiscalYear,
-        }),
       });
       if (!r.ok) throw new Error(`Resume failed (${r.status}): ${await r.text()}`);
-      const { job_id } = (await r.json()) as { job_id: string };
-      try { localStorage.setItem("verdant_job_id", job_id); } catch { /* ignore */ }
-      setSavedJobId(job_id);
-      startListening(job_id, file);
+      startListening(savedJobId, file);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Unknown error";
       setPhase1Error(msg);
       setPhase1Status("failed");
     }
-  }, [steps, savedJobId, fiscalYear, backendUrl, file, runPipeline, startListening]);
+  }, [steps, savedJobId, backendUrl, file, runPipeline, startListening]);
 
   useEffect(() => {
     return () => {
@@ -516,15 +504,12 @@ function Index() {
 
   const phase1Done = phase1Status === "complete";
 
-  // Resume is available when the pipeline failed partway through and we have
-  // a saved job_id with at least one completed step at step 3 or later.
   const firstIncompleteIdx = steps.findIndex((s) => s.status !== "done");
-  const resumeFromStep     = firstIncompleteIdx + 1; // 1-indexed
+  const resumeFromStep = firstIncompleteIdx + 1;
   const canResume =
     phase1Status === "failed" &&
     !!savedJobId &&
-    steps.some((s) => s.status === "done") &&
-    resumeFromStep >= 3;
+    resumeFromStep > 0;
 
   return (
     <div className="min-h-screen font-sans text-foreground selection:bg-[color-mix(in_oklab,var(--accent)_25%,transparent)]">
